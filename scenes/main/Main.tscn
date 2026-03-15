@@ -21,7 +21,7 @@ size = Vector3(10, 2, 0.2)
 script = ExtResource("1")
 
 [node name="Camera3D" type="Camera3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 0.4226, 0.9063, 0, -0.9063, 0.4226, 0, 11.78, -5.49)
+transform = Transform3D(1, 0, 0, 0, 0.3846, -0.9231, 0, 0.9231, 0.3846, 0, 12, 5)
 fov = 45.0
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
