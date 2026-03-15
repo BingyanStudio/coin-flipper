@@ -1,6 +1,5 @@
-M0: 项目骨架搭建
+fix: 修复 M1 代码审查问题
 
-- 创建目录结构: scenes/, scripts/, resources/, assets/
-- 创建主场景 Main.tscn: 65度俯视角摄像机、方向光、桌面(StaticBody3D)、四面边界墙
-- 创建 GameManager.cs 主场景管理器
-- 设置 project.godot 主场景入口
+- Coin.ApplyFlip: 移除多余的 ApplyTorqueImpulse，ApplyImpulse 带偏移已自然产生力矩
+- 移除 Main.tscn 和 Coin.tscn 中手写的 uid，避免 Godot 加载错误
+- 清理 ApplyFlip 方法中的冗余注释

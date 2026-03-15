@@ -74,15 +74,10 @@ public partial class Coin : RigidBody3D
         FlipCount = 0;
         _previousUp = GlobalTransform.Basis.Y;
 
-        // 计算力矩方向：从点击点到硬币中心的偏移
+        // 计算点击偏移：从硬币中心到点击点
         Vector3 offset = hitPoint - GlobalPosition;
-        // 垂直向上的力
-        Vector3 upForce = Vector3.Up * force;
-        // 力矩 = 偏移 × 力方向（叉积产生旋转）
-        Vector3 torque = offset.Cross(Vector3.Up) * force * 2f;
-
-        ApplyImpulse(upForce, offset);
-        ApplyTorqueImpulse(torque);
+        // 在偏移位置施加向上冲量，自然产生力矩（无需额外 TorqueImpulse）
+        ApplyImpulse(Vector3.Up * force, offset);
     }
 
     /// <summary>静止检测：线速度和角速度均低于阈值持续一段时间</summary>

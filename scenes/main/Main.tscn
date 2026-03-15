@@ -1,8 +1,8 @@
-[gd_scene load_steps=7 format=3 uid="uid://bqx1abc123"]
+[gd_scene load_steps=7 format=3]
 
 [ext_resource type="Script" path="res://scripts/core/GameManager.cs" id="1"]
 [ext_resource type="Script" path="res://scripts/core/CoinFlipper.cs" id="2"]
-[ext_resource type="PackedScene" uid="uid://coin_scene_01" path="res://scenes/coin/Coin.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://scenes/coin/Coin.tscn" id="3"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_floor"]
 size = Vector3(10, 0.2, 10)
