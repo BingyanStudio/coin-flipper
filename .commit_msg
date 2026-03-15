@@ -1,6 +1,6 @@
-fix: 使用真实鼠标速度(Velocity)替代帧偏移(Relative)
+revert: 回退鼠标速度影响翻转方向功能
 
-- 改用 InputEventMouseMotion.Velocity (px/s) 获取真实鼠标速度
-- MouseVelocityInfluence 从 0.003 降至 0.0003 适配速度量级
-- 修复 TryFlipCoin 中 hitPoint 变量丢失导致的编译错误
-- 清理重复的日志输出
+回退 2b533af 和 e7218ff 两个 commit。
+原因：
+1. 鼠标速度捕获存在问题，静止时仍有较大值
+2. 非核心玩法，后续再加

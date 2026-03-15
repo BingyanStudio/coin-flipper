@@ -6,10 +6,8 @@ using Godot;
 /// 
 /// 职责：
 /// - 鼠标点击射线检测
-/// - 追踪鼠标移动速度
 /// - 判断点击位置相对于硬币中心的偏移
 /// - 计算力度（基础力度 ± 随机浮动）
-/// - 将鼠标速度转换为水平方向力分量
 /// - 调用 Coin.ApplyFlip()
 /// </summary>
 public partial class CoinFlipper : Node3D
@@ -23,29 +21,14 @@ public partial class CoinFlipper : Node3D
     /// <summary>精准属性（0-1），越高浮动越小</summary>
     [Export] public float Precision { get; set; } = 0.5f;
 
-    /// <summary>鼠标速度对翻转方向的影响系数</summary>
-    [Export] public float MouseVelocityInfluence { get; set; } = 0.0003f;
-
     /// <summary>射线检测长度</summary>
     [Export] public float RayLength { get; set; } = 100f;
 
     private Camera3D _camera;
-    private Vector2 _mouseVelocity;
-    private Vector2 _lastMousePos;
-    private bool _hasLastPos;
 
     public override void _Ready()
     {
         _camera = GetViewport().GetCamera3D();
-    }
-
-    public override void _Input(InputEvent @event)
-    {
-        // 追踪鼠标移动速度
-        if (@event is InputEventMouseMotion motion)
-        {
-            _mouseVelocity = motion.Velocity;
-        }
     }
 
     public override void _UnhandledInput(InputEvent @event)
@@ -59,9 +42,9 @@ public partial class CoinFlipper : Node3D
     }
 
     /// <summary>尝试翻转鼠标位置下的硬币</summary>
-    /// <summary>尝试翻转鼠标位置下的硬币</summary>
     private void TryFlipCoin(Vector2 screenPos)
     {
+        // 从摄像机发射射线
         Vector3 from = _camera.ProjectRayOrigin(screenPos);
         Vector3 dir = _camera.ProjectRayNormal(screenPos);
         Vector3 to = from + dir * RayLength;
@@ -72,31 +55,19 @@ public partial class CoinFlipper : Node3D
 
         if (result.Count == 0) return;
 
+        // 检查是否点击到了硬币
         var collider = result["collider"].AsGodotObject();
         if (collider is not Coin coin) return;
 
-        // 计算力度
+        // 计算力度：基础力度 ± 浮动
         float actualVariance = ForceVariance * (1f - Precision);
-        float rand = (float)GD.RandRange(
-            -actualVariance, actualVariance);
+        float rand = (float)GD.RandRange(-actualVariance, actualVariance);
         float force = BaseForce * (1f + rand);
 
         // 获取点击的世界坐标
         Vector3 hitPoint = result["position"].AsVector3();
 
-        // 将屏幕空间鼠标速度转换为世界空间水平方向
-        Vector3 mouseWorldDir = Vector3.Zero;
-        if (_mouseVelocity.LengthSquared() > 0.1f)
-        {
-            mouseWorldDir = new Vector3(
-                _mouseVelocity.X, 0, _mouseVelocity.Y
-            ) * MouseVelocityInfluence;
-        }
-
-        coin.ApplyFlip(hitPoint, force, mouseWorldDir);
-        GD.Print($"翻转! 力度={force:F2} 鼠标速度=({_mouseVelocity.X:F0},{_mouseVelocity.Y:F0}) px/s");
-
-        // 重置鼠标速度
-        _mouseVelocity = Vector2.Zero;
+        coin.ApplyFlip(hitPoint, force);
+        GD.Print($"翻转硬币! 力度={force:F2}, 翻转点={hitPoint}");
     }
 }
