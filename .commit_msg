@@ -1,7 +1,6 @@
-feat: 鼠标移动速度影响翻转方向
+fix: 使用真实鼠标速度(Velocity)替代帧偏移(Relative)
 
-- CoinFlipper.cs: 追踪鼠标移动速度(InputEventMouseMotion.Relative)
-- CoinFlipper.cs: 点击时将屏幕空间鼠标速度转换为世界空间水平方向力
-- CoinFlipper.cs: 新增 MouseVelocityInfluence 参数控制影响系数
-- Coin.ApplyFlip: 新增 mouseDirection 参数，加入平移冲量
-- docs/design-details.md: 更新 §5 点击交互机制，保持文档 SSOT
+- 改用 InputEventMouseMotion.Velocity (px/s) 获取真实鼠标速度
+- MouseVelocityInfluence 从 0.003 降至 0.0003 适配速度量级
+- 修复 TryFlipCoin 中 hitPoint 变量丢失导致的编译错误
+- 清理重复的日志输出

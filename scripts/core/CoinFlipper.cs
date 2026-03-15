@@ -24,7 +24,7 @@ public partial class CoinFlipper : Node3D
     [Export] public float Precision { get; set; } = 0.5f;
 
     /// <summary>鼠标速度对翻转方向的影响系数</summary>
-    [Export] public float MouseVelocityInfluence { get; set; } = 0.003f;
+    [Export] public float MouseVelocityInfluence { get; set; } = 0.0003f;
 
     /// <summary>射线检测长度</summary>
     [Export] public float RayLength { get; set; } = 100f;
@@ -44,7 +44,7 @@ public partial class CoinFlipper : Node3D
         // 追踪鼠标移动速度
         if (@event is InputEventMouseMotion motion)
         {
-            _mouseVelocity = motion.Relative;
+            _mouseVelocity = motion.Velocity;
         }
     }
 
@@ -58,6 +58,7 @@ public partial class CoinFlipper : Node3D
         }
     }
 
+    /// <summary>尝试翻转鼠标位置下的硬币</summary>
     /// <summary>尝试翻转鼠标位置下的硬币</summary>
     private void TryFlipCoin(Vector2 screenPos)
     {
@@ -80,8 +81,10 @@ public partial class CoinFlipper : Node3D
             -actualVariance, actualVariance);
         float force = BaseForce * (1f + rand);
 
+        // 获取点击的世界坐标
+        Vector3 hitPoint = result["position"].AsVector3();
+
         // 将屏幕空间鼠标速度转换为世界空间水平方向
-        // 屏幕 X → 世界 X，屏幕 Y → 世界 -Z（俯视角）
         Vector3 mouseWorldDir = Vector3.Zero;
         if (_mouseVelocity.LengthSquared() > 0.1f)
         {
@@ -90,18 +93,10 @@ public partial class CoinFlipper : Node3D
             ) * MouseVelocityInfluence;
         }
 
-        Vector3 hitPoint = result["position"].AsVector3();
-
         coin.ApplyFlip(hitPoint, force, mouseWorldDir);
+        GD.Print($"翻转! 力度={force:F2} 鼠标速度=({_mouseVelocity.X:F0},{_mouseVelocity.Y:F0}) px/s");
 
-        if (mouseWorldDir != Vector3.Zero)
-        {
-            GD.Print($"翻转! 力度={force:F2} " +
-                $"鼠标速度=({_mouseVelocity.X:F0}," +
-                $"{_mouseVelocity.Y:F0})");
-        }
-
-        // 重置鼠标速度（避免残留影响下次点击）
+        // 重置鼠标速度
         _mouseVelocity = Vector2.Zero;
     }
 }
