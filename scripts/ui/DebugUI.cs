@@ -7,41 +7,32 @@ using System.Linq;
 /// </summary>
 public partial class DebugUI : Control
 {
-    // 力度调节步进
     private const float ForceStep = 1f;
-    // 精准度调节步进
     private const float PrecisionStep = 0.1f;
+    private const float MinBaseForce = 1f;
+
     private Label _infoLabel;
     private CoinFlipper _flipper;
+    private Node _coinContainer;
 
     public override void _Ready()
     {
-        // 创建信息标签
         _infoLabel = new Label();
         _infoLabel.Position = new Vector2(10, 10);
         _infoLabel.AddThemeColorOverride("font_color", Colors.White);
         _infoLabel.AddThemeFontSizeOverride("font_size", 14);
         AddChild(_infoLabel);
 
-        _flipper = GetTree().Root.FindChild("CoinFlipper",
-            true, false) as CoinFlipper;
+        _flipper = GetTree().Root.FindChild(
+            SceneNodes.CoinFlipper, true, false) as CoinFlipper;
+        _coinContainer = GetTree().Root.FindChild(
+            SceneNodes.CoinContainer, true, false);
     }
 
     public override void _Process(double delta)
     {
-        var coins = GetTree().GetNodesInGroup("coins")
-            .OfType<Coin>().ToArray();
-        if (coins.Length == 0)
-        {
-            // 如果没有分组，尝试从 CoinContainer 获取
-            var container = GetTree().Root.FindChild(
-                "CoinContainer", true, false);
-            if (container != null)
-            {
-                coins = container.GetChildren()
-                    .OfType<Coin>().ToArray();
-            }
-        }
+        var coins = _coinContainer?.GetChildren()
+            .OfType<Coin>().ToArray() ?? System.Array.Empty<Coin>();
 
         string info = "[调试面板]\n";
         info += $"硬币数量: {coins.Length}\n";
@@ -69,23 +60,22 @@ public partial class DebugUI : Control
     public override void _UnhandledInput(InputEvent @event)
     {
         if (_flipper == null) return;
-        // 快捷键调参: +/- 调力度, [/] 调精准
         if (@event is InputEventKey key && key.Pressed)
         {
             switch (key.Keycode)
             {
-                case Key.Equal: // +
+                case Key.Equal:
                     _flipper.BaseForce += ForceStep;
                     break;
-                case Key.Minus: // -
+                case Key.Minus:
                     _flipper.BaseForce = Mathf.Max(
-                        1f, _flipper.BaseForce - ForceStep);
+                        MinBaseForce, _flipper.BaseForce - ForceStep);
                     break;
-                case Key.Bracketright: // ]
+                case Key.Bracketright:
                     _flipper.Precision = Mathf.Min(
                         1f, _flipper.Precision + PrecisionStep);
                     break;
-                case Key.Bracketleft: // [
+                case Key.Bracketleft:
                     _flipper.Precision = Mathf.Max(
                         0f, _flipper.Precision - PrecisionStep);
                     break;
