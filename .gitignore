@@ -1,6 +1,14 @@
 # Godot 4+ specific ignores
 .godot/
 /android/
-".temp/"  
-"stderr.log"  
-"stdout.log"  
+
+# Build outputs
+bin/
+obj/
+
+# Temp files
+.temp/
+stderr.log
+stdout.log
+.commit_msg
+.pr_body.md
