@@ -6,7 +6,7 @@ using Godot;
 /// 
 /// 职责：
 /// - 物理翻转（分离平移冲量和旋转冲量）
-/// - 静止检测（静止后冻结物理以节省性能）
+/// - 静止检测
 /// - 正反面判定
 /// - 立起来判定
 /// - 翻转次数计数（累计旋转角度 / 360°）
@@ -103,8 +103,6 @@ public partial class Coin : RigidBody3D
     /// </summary>
     public void ApplyFlip(Vector3 hitPoint, float force)
     {
-        // 解冻物理（如果之前因静止被冻结）
-        Freeze = false;
 
         // 重置状态
         IsSettled = false;
@@ -157,8 +155,6 @@ public partial class Coin : RigidBody3D
             {
                 IsSettled = true;
                 _isAirborne = false;
-                // 静止后冻结物理，节省性能
-                Freeze = true;
             }
         }
         else
