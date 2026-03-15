@@ -1,0 +1,56 @@
+[gd_scene load_steps=6 format=3 uid="uid://bqx1abc123"]
+
+[ext_resource type="Script" path="res://scripts/core/GameManager.cs" id="1"]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_floor"]
+size = Vector3(10, 0.2, 10)
+
+[sub_resource type="BoxMesh" id="BoxMesh_floor"]
+size = Vector3(10, 0.2, 10)
+
+[sub_resource type="StandardMaterial3D" id="Mat_floor"]
+albedo_color = Color(0.25, 0.2, 0.15, 1)
+roughness = 0.9
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_wall"]
+size = Vector3(10, 2, 0.2)
+
+[node name="Main" type="Node3D"]
+script = ExtResource("1")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.4226, 0.9063, 0, -0.9063, 0.4226, 0, 11.78, -5.49)
+fov = 45.0
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.7071, 0.7071, 0, -0.7071, 0.7071, 0, 10, 0)
+shadow_enabled = true
+
+[node name="Table" type="StaticBody3D" parent="."]
+
+[node name="FloorCol" type="CollisionShape3D" parent="Table"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+shape = SubResource("BoxShape3D_floor")
+
+[node name="FloorMesh" type="MeshInstance3D" parent="Table"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)
+mesh = SubResource("BoxMesh_floor")
+surface_material_override/0 = SubResource("Mat_floor")
+
+[node name="WallN" type="CollisionShape3D" parent="Table"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -5.1)
+shape = SubResource("BoxShape3D_wall")
+
+[node name="WallS" type="CollisionShape3D" parent="Table"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 5.1)
+shape = SubResource("BoxShape3D_wall")
+
+[node name="WallE" type="CollisionShape3D" parent="Table"]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, 5.1, 1, 0)
+shape = SubResource("BoxShape3D_wall")
+
+[node name="WallW" type="CollisionShape3D" parent="Table"]
+transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, -5.1, 1, 0)
+shape = SubResource("BoxShape3D_wall")
+
+[node name="CoinContainer" type="Node3D" parent="."]
