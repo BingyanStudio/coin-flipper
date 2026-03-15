@@ -1,6 +1,8 @@
-[gd_scene load_steps=6 format=3 uid="uid://bqx1abc123"]
+[gd_scene load_steps=7 format=3 uid="uid://bqx1abc123"]
 
 [ext_resource type="Script" path="res://scripts/core/GameManager.cs" id="1"]
+[ext_resource type="Script" path="res://scripts/core/CoinFlipper.cs" id="2"]
+[ext_resource type="PackedScene" uid="uid://coin_scene_01" path="res://scenes/coin/Coin.tscn" id="3"]
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_floor"]
 size = Vector3(10, 0.2, 10)
@@ -53,4 +55,16 @@ shape = SubResource("BoxShape3D_wall")
 transform = Transform3D(0, 0, 1, 0, 1, 0, -1, 0, 0, -5.1, 1, 0)
 shape = SubResource("BoxShape3D_wall")
 
+[node name="CoinFlipper" type="Node3D" parent="."]
+script = ExtResource("2")
+
 [node name="CoinContainer" type="Node3D" parent="."]
+
+[node name="Coin1" parent="CoinContainer" instance=ExtResource("3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 1, 0)
+
+[node name="Coin2" parent="CoinContainer" instance=ExtResource("3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="Coin3" parent="CoinContainer" instance=ExtResource("3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 1, 0)
