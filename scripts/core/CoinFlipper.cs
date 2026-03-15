@@ -68,6 +68,5 @@ public partial class CoinFlipper : Node3D
         Vector3 hitPoint = result["position"].AsVector3();
 
         coin.ApplyFlip(hitPoint, force);
-        GD.Print($"翻转硬币! 力度={force:F2}, 翻转点={hitPoint}");
     }
 }

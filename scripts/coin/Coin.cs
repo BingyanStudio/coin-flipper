@@ -6,7 +6,7 @@ using Godot;
 /// 
 /// 职责：
 /// - 物理翻转（分离平移冲量和旋转冲量）
-/// - 静止检测
+/// - 静止检测（静止后冻结物理以节省性能）
 /// - 正反面判定
 /// - 立起来判定
 /// - 翻转次数计数（累计旋转角度 / 360°）
@@ -53,6 +53,9 @@ public partial class Coin : RigidBody3D
     /// <summary>点击硬币中心时的扭矩比例，用于随机旋转强度</summary>
     [Export] public float CenterClickTorqueRatio { get; set; } = 0.5f;
 
+    /// <summary>翻转力度的最小值，防止力度过小导致硬币几乎不动</summary>
+    [Export] public float MinFlipForce { get; set; } = 0.5f;
+
     // 内部状态
     private float _settleTimer;
     private bool _isAirborne;
@@ -62,10 +65,6 @@ public partial class Coin : RigidBody3D
     public override void _Ready()
     {
         _previousUp = GlobalTransform.Basis.Y;
-
-        // 输出惯性张量用于调试
-        GD.Print($"[{Name}] 惯性张量={Inertia}");
-        GD.Print($"[{Name}] 质量={Mass}, CCD={ContinuousCd}");
     }
 
     public override void _PhysicsProcess(double delta)
@@ -89,7 +88,6 @@ public partial class Coin : RigidBody3D
         Vector3 localAngVel = GlobalTransform.Basis.Inverse() *
             state.AngularVelocity;
 
-        // 分别对各轴施加不同阻尼
         Vector3 dampedLocal = new Vector3(
             localAngVel.X * (1f - RadialDamp * (float)state.Step),
             localAngVel.Y * (1f - AxialDamp * (float)state.Step),
@@ -105,6 +103,9 @@ public partial class Coin : RigidBody3D
     /// </summary>
     public void ApplyFlip(Vector3 hitPoint, float force)
     {
+        // 解冻物理（如果之前因静止被冻结）
+        Freeze = false;
+
         // 重置状态
         IsSettled = false;
         _settleTimer = 0f;
@@ -113,18 +114,19 @@ public partial class Coin : RigidBody3D
         FlipCount = 0;
         _previousUp = GlobalTransform.Basis.Y;
 
+        // 力度下限保护
+        force = Mathf.Max(force, MinFlipForce);
+
         // 1. 平移冲量：纯向上，控制弹起高度
         ApplyCentralImpulse(Vector3.Up * force);
 
         // 2. 旋转冲量：基于点击偏移方向
         Vector3 offset = hitPoint - GlobalPosition;
-        // offset 在水平面上的分量决定翻转轴
         Vector3 horizontalOffset = new Vector3(
             offset.X, 0, offset.Z);
 
         if (horizontalOffset.LengthSquared() > 0.001f)
         {
-            // 翻转轴 = 偏移方向的垂直方向（叉积）
             Vector3 torqueAxis = horizontalOffset.Cross(Vector3.Up)
                 .Normalized();
             float torqueMag = force * TorqueMultiplier
@@ -133,7 +135,6 @@ public partial class Coin : RigidBody3D
         }
         else
         {
-            // 点击中心：随机轻微旋转
             Vector3 randomAxis = new Vector3(
                 (float)GD.RandRange(-1, 1), 0,
                 (float)GD.RandRange(-1, 1)).Normalized();
@@ -156,6 +157,8 @@ public partial class Coin : RigidBody3D
             {
                 IsSettled = true;
                 _isAirborne = false;
+                // 静止后冻结物理，节省性能
+                Freeze = true;
             }
         }
         else
