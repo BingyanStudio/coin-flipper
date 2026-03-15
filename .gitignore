@@ -11,3 +11,4 @@ obj/
 stderr.log
 stdout.log
 .commit_msg
+.pr_body.md

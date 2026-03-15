@@ -14,7 +14,6 @@ config/name="Coin Flipper"
 run/main_scene="res://scenes/main/Main.tscn"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
-config/main_scene="res://scenes/main/Main.tscn"
 
 [dotnet]
 
