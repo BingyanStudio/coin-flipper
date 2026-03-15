@@ -4,6 +4,10 @@ using Godot;
 /// 硬币基础类。管理单个硬币的物理行为和状态判定。
 /// 服务于 Milestone 1：核心物理原型。
 /// 
+/// 物理参数分工：
+/// - Godot 原生属性（mass, linear_damp, angular_damp, friction, bounce）在 Coin.tscn 中配置
+/// - 自定义逻辑参数（阻尼系数、检测阈值等）通过下方 [Export] 属性配置
+/// 
 /// 职责：
 /// - 物理翻转（分离平移冲量和旋转冲量）
 /// - 静止检测
@@ -103,7 +107,6 @@ public partial class Coin : RigidBody3D
     /// </summary>
     public void ApplyFlip(Vector3 hitPoint, float force)
     {
-
         // 重置状态
         IsSettled = false;
         _settleTimer = 0f;

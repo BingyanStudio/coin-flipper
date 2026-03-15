@@ -11,12 +11,19 @@ public static class DebugBootstrap
     {
         PrintSceneDebugInfo(root);
 
+        // 调试 UI 面板（纯显示）
         var debugUI = new DebugUI();
         debugUI.Name = "DebugUI";
+
+        // 调试快捷键处理器（输入）
+        var debugInput = new DebugInputHandler();
+        debugInput.Name = "DebugInputHandler";
+
         var canvas = new CanvasLayer();
         canvas.Name = "DebugCanvas";
         canvas.Layer = 100;
         canvas.AddChild(debugUI);
+        canvas.AddChild(debugInput);
         root.AddChild(canvas);
 
         GD.Print("调试面板已加载");
@@ -47,6 +54,10 @@ public static class DebugBootstrap
             var p = table.GlobalPosition;
             GD.Print($"[Table] 位置=({p.X:F2}, {p.Y:F2}, {p.Z:F2})");
         }
+        else
+        {
+            GD.PrintErr($"[Table] 未找到节点 '{SceneNodes.Table}'");
+        }
 
         var container = root.FindChild(
             SceneNodes.CoinContainer, true, false);
@@ -63,6 +74,10 @@ public static class DebugBootstrap
                 }
             }
             GD.Print($"[Coins] 共 {count} 个硬币");
+        }
+        else
+        {
+            GD.PrintErr($"[CoinContainer] 未找到节点 '{SceneNodes.CoinContainer}'");
         }
 
         var vp = root.GetViewport();

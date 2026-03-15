@@ -12,11 +12,19 @@ using Godot;
 /// </summary>
 public partial class CoinFlipper : Node3D
 {
-    /// <summary>基础翻转力度</summary>
-    [Export] public float BaseForce { get; set; } = 2f;
+    /// <summary>基础翻转力度（下限由 MinBaseForce 约束）</summary>
+    private float _baseForce = 2f;
+    [Export] public float BaseForce
+    {
+        get => _baseForce;
+        set => _baseForce = Mathf.Max(value, MinBaseForce);
+    }
 
     /// <summary>力度随机浮动范围（±百分比）</summary>
     [Export] public float ForceVariance { get; set; } = 0.3f;
+
+    /// <summary>力度下限，防止力度被调到无效值</summary>
+    [Export] public float MinBaseForce { get; set; } = 1f;
 
     /// <summary>精准属性（0-1），越高浮动越小</summary>
     [Export] public float Precision { get; set; } = 0.5f;

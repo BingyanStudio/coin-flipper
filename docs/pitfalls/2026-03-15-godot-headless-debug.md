@@ -1,5 +1,9 @@
 # Godot 项目主动调试方法
 
+- **日期**: 2026-03-15
+- **关键词**: Transform3D, .csproj, headless, 摄像机朝向
+- **影响范围**: scenes/, scripts/
+
 ## 现象
 手写 .tscn 中的 Transform3D 导致摄像机朝向错误，但无法直观判断问题所在。用户反复测试仍看不到场景内容。
 
