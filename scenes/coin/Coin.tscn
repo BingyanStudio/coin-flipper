@@ -24,8 +24,8 @@ roughness = 0.3
 [node name="Coin" type="RigidBody3D"]
 mass = 0.5
 physics_material_override = SubResource("PhysMat_coin")
-linear_damp = 0.8
-angular_damp = 1.5
+linear_damp = 0.2
+angular_damp = 0.3
 continuous_cd = true
 contact_monitor = true
 max_contacts_reported = 4

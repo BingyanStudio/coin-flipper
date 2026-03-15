@@ -41,8 +41,8 @@ public partial class Coin : RigidBody3D
     // 各向异性角阻尼参数
     // 绕竖轴(Y)的阻尼较小 → 进动持续更久
     // 绕水平轴(X/Z)的阻尼较大 → 翻转衰减更快
-    private const float AxialDamp = 0.5f;
-    private const float RadialDamp = 3.0f;
+    private const float AxialDamp = 0.1f;
+    private const float RadialDamp = 0.8f;
 
     // 内部状态
     private float _settleTimer;

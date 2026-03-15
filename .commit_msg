@@ -1,21 +1,4 @@
-feat: 真实硬币物理效果 + 力度调整 + 踩坑记录
+fix: 降低空气阻力和角阻尼
 
-物理效果改进:
-- Coin.tscn: 添加 PhysicsMaterial(friction=0.5, bounce=0.4)，硬币落地会弹跳和滚动
-- Coin.tscn: 添加 linear_damp=0.8, angular_damp=1.5 模拟空气阻力
-- Coin.tscn: 启用 CCD 防止高速穿透，禁用 sleep 防止进动被截断
-- Coin.tscn: 碰撞体高度从 0.1 增至 0.12 提高薄物体碰撞稳定性
-- Main.tscn: 桌面添加 PhysicsMaterial(friction=0.6, bounce=0.3)
-
-翻转力学重构:
-- Coin.ApplyFlip: 分离平移冲量(控制高度)和旋转冲量(控制翻转)
-- 点击边缘产生更大旋转，点击中心产生随机轻微旋转
-- 新增 TorqueMultiplier 参数控制翻转速度
-
-各向异性角阻尼:
-- Coin._IntegrateForces: 绕竖轴阻尼小(进动持续久)，绕水平轴阻尼大(翻转衰减快)
-- 模拟真实硬币的进动(precession)效果
-
-其他:
-- CoinFlipper.BaseForce 默认值从 8 调整为 2
-- 添加踩坑记录: docs/pitfalls/2026-03-15-godot-headless-debug.md
+- Coin.tscn: linear_damp 0.8->0.2, angular_damp 1.5->0.3
+- Coin.cs: AxialDamp 0.5->0.1, RadialDamp 3.0->0.8
