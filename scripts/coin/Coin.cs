@@ -87,6 +87,9 @@ public partial class Coin : RigidBody3D
         // 初始化标签管理器
         Tags = new TagManager(this, GameServices.EventBus);
         Tags.Quality = Quality;
+
+        // 连接碰撞信号（用于 CoinHitEvent）
+        BodyEntered += OnBodyEntered;
     }
 
     public override void _PhysicsProcess(double delta)
@@ -276,6 +279,27 @@ public partial class Coin : RigidBody3D
                 Coin = this,
                 LastPosition = _lastValidPosition,
             });
+        }
+    }
+
+    /// <summary>碰撞信号处理：当其他硬币碰到本硬币时发布 CoinHitEvent</summary>
+    private void OnBodyEntered(Node body)
+    {
+        if (body is Coin hitter && hitter != this)
+        {
+            // 计算碰撞力度（用相对速度近似）
+            float impactForce = (hitter.LinearVelocity - LinearVelocity).Length();
+
+            // 仅在碰撞力度超过阈值时触发（避免静止接触误触发）
+            if (impactForce > 0.5f)
+            {
+                GameServices.EventBus?.Publish(new CoinHitEvent
+                {
+                    Target = this,
+                    Hitter = hitter,
+                    ImpactForce = impactForce,
+                });
+            }
         }
     }
 

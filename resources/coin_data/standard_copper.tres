@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="CoinDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/coin/CoinDefinition.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+DefinitionId = "standard_copper"
+DisplayName = "铜币"
+FaceValue = 1
+Quality = 1
+SizeScale = 1.0
+Mass = 0.5
+IntrinsicTagIds = PackedStringArray()
+AlbedoColor = Color(0.85, 0.65, 0.13, 1)
