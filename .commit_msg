@@ -1,6 +1,10 @@
-revert: 回退鼠标速度影响翻转方向功能
+refactor: 硬编码常量改为参数驱动
 
-回退 2b533af 和 e7218ff 两个 commit。
-原因：
-1. 鼠标速度捕获存在问题，静止时仍有较大值
-2. 非核心玩法，后续再加
+Coin.cs:
+- 6个 private const 改为 [Export] 属性，可在 Inspector 中调整:
+  SettleLinearThreshold, SettleAngularThreshold, SettleTimeRequired,
+  StandingAngleThreshold, AxialDamp, RadialDamp
+- 提取 CenterClickTorqueRatio 替代 ApplyFlip 中的魔法数字 0.5f
+
+DebugUI.cs:
+- 提取 ForceStep 和 PrecisionStep 常量替代魔法数字

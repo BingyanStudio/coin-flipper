@@ -7,6 +7,10 @@ using System.Linq;
 /// </summary>
 public partial class DebugUI : Control
 {
+    // 力度调节步进
+    private const float ForceStep = 1f;
+    // 精准度调节步进
+    private const float PrecisionStep = 0.1f;
     private Label _infoLabel;
     private CoinFlipper _flipper;
 
@@ -71,19 +75,19 @@ public partial class DebugUI : Control
             switch (key.Keycode)
             {
                 case Key.Equal: // +
-                    _flipper.BaseForce += 1f;
+                    _flipper.BaseForce += ForceStep;
                     break;
                 case Key.Minus: // -
                     _flipper.BaseForce = Mathf.Max(
-                        1f, _flipper.BaseForce - 1f);
+                        1f, _flipper.BaseForce - ForceStep);
                     break;
                 case Key.Bracketright: // ]
                     _flipper.Precision = Mathf.Min(
-                        1f, _flipper.Precision + 0.1f);
+                        1f, _flipper.Precision + PrecisionStep);
                     break;
                 case Key.Bracketleft: // [
                     _flipper.Precision = Mathf.Max(
-                        0f, _flipper.Precision - 0.1f);
+                        0f, _flipper.Precision - PrecisionStep);
                     break;
             }
         }

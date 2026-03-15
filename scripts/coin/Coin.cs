@@ -32,17 +32,26 @@ public partial class Coin : RigidBody3D
     /// <summary>本次弹起的物理翻转次数</summary>
     public int FlipCount { get; private set; }
 
-    // 静止检测阈值
-    private const float SettleLinearThreshold = 0.05f;
-    private const float SettleAngularThreshold = 0.1f;
-    private const float SettleTimeRequired = 0.5f;
-    private const float StandingAngleThreshold = 70f;
+    /// <summary>静止检测的线速度阈值，低于此值视为接近静止</summary>
+    [Export] public float SettleLinearThreshold { get; set; } = 0.05f;
 
-    // 各向异性角阻尼参数
-    // 绕竖轴(Y)的阻尼较小 → 进动持续更久
-    // 绕水平轴(X/Z)的阻尼较大 → 翻转衰减更快
-    private const float AxialDamp = 0.1f;
-    private const float RadialDamp = 0.8f;
+    /// <summary>静止检测的角速度阈值，低于此值视为接近静止</summary>
+    [Export] public float SettleAngularThreshold { get; set; } = 0.1f;
+
+    /// <summary>判定为静止所需的持续时间（秒）</summary>
+    [Export] public float SettleTimeRequired { get; set; } = 0.5f;
+
+    /// <summary>判定为"立起来"的角度阈值（度），与垂直方向夹角大于此值视为立起</summary>
+    [Export] public float StandingAngleThreshold { get; set; } = 70f;
+
+    /// <summary>轴向阻尼系数，绕硬币法线方向(Y轴)的旋转衰减率，值越小进动持续越久</summary>
+    [Export] public float AxialDamp { get; set; } = 0.1f;
+
+    /// <summary>径向阻尼系数，绕硬币径向(X/Z轴)的旋转衰减率，值越大翻转衰减越快</summary>
+    [Export] public float RadialDamp { get; set; } = 0.8f;
+
+    /// <summary>点击硬币中心时的扭矩比例，用于随机旋转强度</summary>
+    [Export] public float CenterClickTorqueRatio { get; set; } = 0.5f;
 
     // 内部状态
     private float _settleTimer;
@@ -128,7 +137,7 @@ public partial class Coin : RigidBody3D
             Vector3 randomAxis = new Vector3(
                 (float)GD.RandRange(-1, 1), 0,
                 (float)GD.RandRange(-1, 1)).Normalized();
-            ApplyTorqueImpulse(randomAxis * force * 0.5f);
+            ApplyTorqueImpulse(randomAxis * force * CenterClickTorqueRatio);
         }
     }
 
