@@ -77,6 +77,7 @@ public partial class Coin : RigidBody3D
     private float _cumulativeRotation;
     private Vector3 _previousUp;
     private bool _wasSettled;
+    private bool _hasFallenOff;
     private Vector3 _lastValidPosition;
 
     public override void _Ready()
@@ -272,13 +273,20 @@ public partial class Coin : RigidBody3D
 
     private void UpdateFallOffDetection()
     {
+        if (_hasFallenOff) return;
+
         if (GlobalPosition.Y < FallOffY)
         {
+            _hasFallenOff = true;
             GameServices.EventBus?.Publish(new CoinFellOffEvent
             {
                 Coin = this,
                 LastPosition = _lastValidPosition,
             });
+
+            // 延迟重置标记，允许回归标签处理后再次检测
+            var timer = GetTree().CreateTimer(0.5f);
+            timer.Timeout += () => _hasFallenOff = false;
         }
     }
 
