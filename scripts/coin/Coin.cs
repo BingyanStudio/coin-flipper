@@ -5,16 +5,20 @@ using Godot;
 /// 服务于 Milestone 1：核心物理原型。
 /// 
 /// 职责：
-/// - 物理翻转（接收力和力矩）
+/// - 物理翻转（分离平移冲量和旋转冲量）
 /// - 静止检测
 /// - 正反面判定
 /// - 立起来判定
 /// - 翻转次数计数（累计旋转角度 / 360°）
+/// - 各向异性角阻尼（模拟真实进动效果）
 /// </summary>
 public partial class Coin : RigidBody3D
 {
     /// <summary>硬币面值</summary>
     [Export] public int FaceValue { get; set; } = 1;
+
+    /// <summary>旋转冲量倍率，控制翻转速度</summary>
+    [Export] public float TorqueMultiplier { get; set; } = 3f;
 
     /// <summary>硬币是否已静止</summary>
     public bool IsSettled { get; private set; }
@@ -32,8 +36,13 @@ public partial class Coin : RigidBody3D
     private const float SettleLinearThreshold = 0.05f;
     private const float SettleAngularThreshold = 0.1f;
     private const float SettleTimeRequired = 0.5f;
-    // 立起来判定：up 向量与世界 up 夹角 > 70° 视为立起来
     private const float StandingAngleThreshold = 70f;
+
+    // 各向异性角阻尼参数
+    // 绕竖轴(Y)的阻尼较小 → 进动持续更久
+    // 绕水平轴(X/Z)的阻尼较大 → 翻转衰减更快
+    private const float AxialDamp = 0.5f;
+    private const float RadialDamp = 3.0f;
 
     // 内部状态
     private float _settleTimer;
@@ -44,8 +53,10 @@ public partial class Coin : RigidBody3D
     public override void _Ready()
     {
         _previousUp = GlobalTransform.Basis.Y;
-        ContactMonitor = true;
-        MaxContactsReported = 4;
+
+        // 输出惯性张量用于调试
+        GD.Print($"[{Name}] 惯性张量={Inertia}");
+        GD.Print($"[{Name}] 质量={Mass}, CCD={ContinuousCd}");
     }
 
     public override void _PhysicsProcess(double delta)
@@ -59,11 +70,30 @@ public partial class Coin : RigidBody3D
         }
     }
 
+    public override void _IntegrateForces(PhysicsDirectBodyState3D state)
+    {
+        // 各向异性角阻尼：模拟真实硬币的进动效果
+        // 绕硬币自身 Y 轴（法线方向）的旋转衰减慢
+        // 绕硬币自身 X/Z 轴（径向）的旋转衰减快
+        if (!_isAirborne) return;
+
+        Vector3 localAngVel = GlobalTransform.Basis.Inverse() *
+            state.AngularVelocity;
+
+        // 分别对各轴施加不同阻尼
+        Vector3 dampedLocal = new Vector3(
+            localAngVel.X * (1f - RadialDamp * (float)state.Step),
+            localAngVel.Y * (1f - AxialDamp * (float)state.Step),
+            localAngVel.Z * (1f - RadialDamp * (float)state.Step)
+        );
+
+        state.AngularVelocity = GlobalTransform.Basis * dampedLocal;
+    }
+
     /// <summary>
     /// 对硬币施加翻转力。由 CoinFlipper 调用。
+    /// 分离为平移冲量（控制高度）和旋转冲量（控制翻转）。
     /// </summary>
-    /// <param name="hitPoint">世界空间中的点击位置</param>
-    /// <param name="force">施加的力大小</param>
     public void ApplyFlip(Vector3 hitPoint, float force)
     {
         // 重置状态
@@ -74,19 +104,41 @@ public partial class Coin : RigidBody3D
         FlipCount = 0;
         _previousUp = GlobalTransform.Basis.Y;
 
-        // 计算点击偏移：从硬币中心到点击点
+        // 1. 平移冲量：纯向上，控制弹起高度
+        ApplyCentralImpulse(Vector3.Up * force);
+
+        // 2. 旋转冲量：基于点击偏移方向
         Vector3 offset = hitPoint - GlobalPosition;
-        // 在偏移位置施加向上冲量，自然产生力矩（无需额外 TorqueImpulse）
-        ApplyImpulse(Vector3.Up * force, offset);
+        // offset 在水平面上的分量决定翻转轴
+        Vector3 horizontalOffset = new Vector3(
+            offset.X, 0, offset.Z);
+
+        if (horizontalOffset.LengthSquared() > 0.001f)
+        {
+            // 翻转轴 = 偏移方向的垂直方向（叉积）
+            Vector3 torqueAxis = horizontalOffset.Cross(Vector3.Up)
+                .Normalized();
+            float torqueMag = force * TorqueMultiplier
+                * horizontalOffset.Length();
+            ApplyTorqueImpulse(torqueAxis * torqueMag);
+        }
+        else
+        {
+            // 点击中心：随机轻微旋转
+            Vector3 randomAxis = new Vector3(
+                (float)GD.RandRange(-1, 1), 0,
+                (float)GD.RandRange(-1, 1)).Normalized();
+            ApplyTorqueImpulse(randomAxis * force * 0.5f);
+        }
     }
 
-    /// <summary>静止检测：线速度和角速度均低于阈值持续一段时间</summary>
     private void UpdateSettleDetection(float delta)
     {
         if (IsSettled) return;
 
-        bool isSlow = LinearVelocity.Length() < SettleLinearThreshold
-                   && AngularVelocity.Length() < SettleAngularThreshold;
+        bool isSlow =
+            LinearVelocity.Length() < SettleLinearThreshold
+            && AngularVelocity.Length() < SettleAngularThreshold;
 
         if (isSlow)
         {
@@ -103,28 +155,27 @@ public partial class Coin : RigidBody3D
         }
     }
 
-    /// <summary>正反面判定：up 向量与世界 up 的点积</summary>
     private void UpdateFaceDetection()
     {
         float dot = GlobalTransform.Basis.Y.Dot(Vector3.Up);
         IsFaceUp = dot > 0;
     }
 
-    /// <summary>立起来判定：up 向量与世界 up 的夹角</summary>
     private void UpdateStandingDetection()
     {
-        float dot = Mathf.Abs(GlobalTransform.Basis.Y.Dot(Vector3.Up));
+        float dot = Mathf.Abs(
+            GlobalTransform.Basis.Y.Dot(Vector3.Up));
         float angleDeg = Mathf.RadToDeg(Mathf.Acos(dot));
         IsStanding = angleDeg > StandingAngleThreshold;
     }
 
-    /// <summary>翻转次数追踪：累计旋转角度 / 360°</summary>
     private void UpdateFlipTracking()
     {
         if (!_isAirborne) return;
 
         Vector3 currentUp = GlobalTransform.Basis.Y;
-        float dot = Mathf.Clamp(_previousUp.Dot(currentUp), -1f, 1f);
+        float dot = Mathf.Clamp(
+            _previousUp.Dot(currentUp), -1f, 1f);
         float angleDelta = Mathf.RadToDeg(Mathf.Acos(dot));
         _cumulativeRotation += angleDelta;
         FlipCount = (int)(_cumulativeRotation / 360f);

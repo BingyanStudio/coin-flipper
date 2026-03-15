@@ -1,8 +1,12 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=8 format=3]
 
 [ext_resource type="Script" path="res://scripts/core/GameManager.cs" id="1"]
 [ext_resource type="Script" path="res://scripts/core/CoinFlipper.cs" id="2"]
 [ext_resource type="PackedScene" path="res://scenes/coin/Coin.tscn" id="3"]
+
+[sub_resource type="PhysicsMaterial" id="PhysMat_table"]
+friction = 0.6
+bounce = 0.3
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_floor"]
 size = Vector3(10, 0.2, 10)
@@ -29,6 +33,7 @@ transform = Transform3D(1, 0, 0, 0, 0.7071, 0.7071, 0, -0.7071, 0.7071, 0, 10, 0
 shadow_enabled = true
 
 [node name="Table" type="StaticBody3D" parent="."]
+physics_material_override = SubResource("PhysMat_table")
 
 [node name="FloorCol" type="CollisionShape3D" parent="Table"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.1, 0)

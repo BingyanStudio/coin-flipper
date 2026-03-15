@@ -13,7 +13,7 @@ using Godot;
 public partial class CoinFlipper : Node3D
 {
     /// <summary>基础翻转力度</summary>
-    [Export] public float BaseForce { get; set; } = 8f;
+    [Export] public float BaseForce { get; set; } = 2f;
 
     /// <summary>力度随机浮动范围（±百分比）</summary>
     [Export] public float ForceVariance { get; set; } = 0.3f;
