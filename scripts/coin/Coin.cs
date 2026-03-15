@@ -94,7 +94,10 @@ public partial class Coin : RigidBody3D
     /// 对硬币施加翻转力。由 CoinFlipper 调用。
     /// 分离为平移冲量（控制高度）和旋转冲量（控制翻转）。
     /// </summary>
-    public void ApplyFlip(Vector3 hitPoint, float force)
+    /// <param name="hitPoint">点击位置（世界坐标）</param>
+    /// <param name="force">翻转力度</param>
+    /// <param name="mouseDirection">鼠标移动方向（世界空间水平方向），用于施加水平偏移力</param>
+    public void ApplyFlip(Vector3 hitPoint, float force, Vector3 mouseDirection)
     {
         // 重置状态
         IsSettled = false;
@@ -105,7 +108,7 @@ public partial class Coin : RigidBody3D
         _previousUp = GlobalTransform.Basis.Y;
 
         // 1. 平移冲量：纯向上，控制弹起高度
-        ApplyCentralImpulse(Vector3.Up * force);
+        ApplyCentralImpulse(Vector3.Up * force + mouseDirection * force);
 
         // 2. 旋转冲量：基于点击偏移方向
         Vector3 offset = hitPoint - GlobalPosition;
