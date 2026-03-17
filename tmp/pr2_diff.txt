@@ -1,0 +1,2796 @@
+diff --git a/.roo/expert-output/tag-effect-system-architecture.md b/.roo/expert-output/tag-effect-system-architecture.md
+new file mode 100644
+index 0000000..f6ee461
+--- /dev/null
++++ b/.roo/expert-output/tag-effect-system-architecture.md
+@@ -0,0 +1,838 @@
++# 在 Godot 4 C# 中实现数据驱动的标签/效果系统：架构模式与设计原则
++
++> 技术咨询备忘录  
++> 领域：Godot 4 C# 游戏架构 · 组件/标签系统设计  
++> 项目背景：类 Balatro 硬币翻转游戏，标签驱动一切行为
++
++---
++
++## 目录
++
++1. [问题本质分析](#1-问题本质分析)
++2. [核心设计原则](#2-核心设计原则)
++3. [架构模式选型：三条路径的深度对比](#3-架构模式选型三条路径的深度对比)
++4. [推荐架构：事件驱动的标签组件系统](#4-推荐架构事件驱动的标签组件系统)
++5. [标签生命周期与触发时机模型](#5-标签生命周期与触发时机模型)
++6. [数据驱动层设计](#6-数据驱动层设计)
++7. [组合涌现性的架构保障](#7-组合涌现性的架构保障)
++8. [结算管线：有序的混沌](#8-结算管线有序的混沌)
++9. [与 Godot 节点树的协作模式](#9-与-godot-节点树的协作模式)
++10. [权衡矩阵总览](#10-权衡矩阵总览)
++11. [反模式警示](#11-反模式警示)
++12. [渐进式实施路径](#12-渐进式实施路径)
++
++---
++
++## 1. 问题本质分析
++
++在深入架构之前，先识别你面对的**根本设计张力**：
++
++### 1.1 你在构建什么
++
++你的标签系统不是一个简单的 buff/debuff 系统。从设计文档来看，它是一个**行为定义系统**——标签不仅修饰硬币，标签**就是**硬币。"小兔子硬币"不是一个特殊类，而是 `{虚无, 脆弱, 生物}` 三个标签的组合。这意味着：
++
++- **标签是一等公民**，不是附属品
++- **硬币是标签的容器**，不是标签的宿主
++- **行为完全由标签组合涌现**，硬币本身只提供物理载体和基础属性
++
++这个认知至关重要，因为它决定了架构的重心应该放在哪里。
++
++### 1.2 核心张力
++
++| 张力 | 一端 | 另一端 |
++|------|------|--------|
++| **确定性 vs 涌现性** | 每个标签效果可预测、可测试 | 标签组合产生未预料的交互 |
++| **执行顺序 vs 声明式** | 效果需要明确的执行顺序（先加后乘） | 标签定义应该是声明式的，不关心顺序 |
++| **数据驱动 vs 代码灵活性** | 希望通过数据定义新标签 | 复杂标签（如"兔子"）需要代码逻辑 |
++| **Godot 节点模型 vs 纯 C# 架构** | 利用 Godot 的节点/信号/场景系统 | 保持架构的引擎无关性和可测试性 |
++| **物理时序 vs 逻辑时序** | 物理事件（碰撞、静止）是异步的 | 结算逻辑需要同步、有序执行 |
++
++你的架构需要在这些张力之间找到平衡点，而不是试图消除它们。
++
++---
++
++## 2. 核心设计原则
++
++### 原则 1：标签是行为的原子单位（Atomic Behavior Unit）
++
++**WHY**：如果标签不是原子的，组合就不是自由的。当一个标签内部包含了对其他标签的假设（"如果同时有 X 标签则..."），你就在标签之间创建了隐式耦合，组合空间会指数级缩小。
++
++**推理链**：
++- 涌现性 = 独立规则的自由组合
++- 自由组合 = 每个规则不假设其他规则的存在
++- 不假设 = 每个标签只描述自己的行为，通过共享状态（硬币属性）间接交互
++- 因此：标签之间**不应直接引用**，而是通过**修改硬币/场景的共享状态**来间接影响彼此
++
++**判断标准**：当你实现一个新标签时，如果需要 `import` 或引用另一个标签的类型，这是一个设计气味。标签应该只依赖：硬币的公共接口、游戏事件、全局查询服务。
++
++**例外**：`生物` 标签需要"移除自身，添加尸体标签"——这不是对尸体标签的依赖，而是对**标签管理服务**的依赖（"请给这个硬币添加 ID 为 'corpse' 的标签"）。用字符串/枚举 ID 引用，而非类型引用。
++
++### 原则 2：事件是唯一的触发通道（Single Trigger Channel）
++
++**WHY**：你有 6 种触发时机（翻转时、落地时、结算时、被砸时、掉出场地时、持续性），未来还会增加。如果每种时机用不同的机制触发（有的用 Godot 信号、有的用直接方法调用、有的用物理回调），系统会变得不可预测。
++
++**推理链**：
++- 可预测性 = 统一的触发路径
++- 统一触发 = 所有标签通过同一种机制接收事件
++- 同一种机制 = 一个中心化的事件总线/分发器
++- 因此：物理层产生原始事件 → 事件分发器标准化 → 标签统一接收
++
++**判断标准**：如果你发现某个标签的触发逻辑需要直接订阅 Godot 的物理信号（如 `body_entered`），这说明事件抽象层有缺口。物理信号应该被翻译成游戏事件后再分发给标签。
++
++### 原则 3：效果是数据，执行是管线（Effect as Data, Execution as Pipeline）
++
++**WHY**：标签的效果不应该直接修改游戏状态。如果"正面翻倍"标签在触发时直接把分数乘以 2，那么执行顺序就变成了标签遍历顺序，这是脆弱的。
++
++**推理链**：
++- 双乘区公式 = 先加后乘 = 需要收集所有效果后统一计算
++- 统一计算 = 效果不能立即执行，需要先收集
++- 先收集 = 效果是数据（"我要给 Mult 加 0.5"），不是动作（"把 Mult 加 0.5"）
++- 因此：标签产出**效果描述**（Effect Descriptor），结算管线收集所有描述后按规则执行
++
++**判断标准**：如果一个标签的 `Execute()` 方法直接修改了 `GameState.Score`，这是违反原则的。标签应该返回 `ScoreModifier { Type = Additive, Target = Mult, Value = 0.5 }`。
++
++**适用范围**：这个原则主要适用于**结算时**的效果。对于即时物理效果（如"超重"修改质量、"磁力"施加力），直接修改是合理的——但应该通过明确的 `ApplyPassiveEffects()` / `ApplyPhysicsEffects()` 通道，而非散落在各处。
++
++### 原则 4：标签的身份是数据，标签的行为是代码（Identity as Data, Behavior as Code）
++
++**WHY**：你希望数据驱动，但标签的行为差异太大——"虚无"是简单的生命周期规则，"兔子"需要生成新硬币，"磁力"需要物理力场。试图用纯数据描述所有行为会导致你发明一门脚本语言。
++
++**推理链**：
++- 数据驱动的价值 = 快速迭代 + 非程序员可编辑
++- 但行为复杂度有谱系：简单属性修改 ↔ 复杂逻辑
++- 强制统一 = 要么限制表达力，要么发明 DSL
++- 因此：分层——**元数据**（名称、描述、稀有度、图标）用数据定义，**行为**用代码实现，通过 ID 关联
++
++**判断标准**：
++- 如果一个新标签只需要修改数值（如"面值 +5"），应该能通过数据配置实现
++- 如果一个新标签需要新的逻辑（如"落地后生成硬币"），需要写新的行为类
++- 你的系统应该同时支持这两种情况
++
++### 原则 5：查询优于存储（Query over Cache）
++
++**WHY**：当标签可以动态添加/移除时，缓存的派生状态（如"这个硬币的有效质量"）很容易过期。
++
++**推理链**：
++- 标签动态变化 → 派生状态随时可能失效
++- 失效的缓存 = bug 的温床
++- 因此：优先实时查询（"遍历所有标签，计算当前有效质量"），只在性能瓶颈处引入缓存
++- 缓存时必须有明确的失效机制（标签变更时标记 dirty）
++
++**判断标准**：你的硬币数量级是几十个，不是几万个。在这个规模下，每帧遍历所有标签的成本可以忽略。过早优化缓存会引入一整类 bug。
++
++### 原则 6：物理层与逻辑层的清晰边界（Physics-Logic Boundary）
++
++**WHY**：你的游戏独特之处在于物理模拟是核心玩法，不是装饰。物理事件（碰撞、静止、掉落）是标签触发的来源。但物理引擎的时序是不确定的（碰撞回调的顺序、`_PhysicsProcess` 的时机），而标签逻辑需要确定性。
++
++**推理链**：
++- 物理引擎 = 连续的、不确定顺序的事件流
++- 标签逻辑 = 离散的、需要确定顺序的处理
++- 因此：需要一个**翻译层**，将物理事件转化为游戏事件，并在适当的时机批量分发
++
++**判断标准**：`Coin.cs`（物理层）不应该知道标签系统的存在。它只负责报告物理状态变化（"我静止了"、"我被碰撞了"、"我掉出边界了"）。标签系统订阅这些报告并做出响应。
++
++---
++
++## 3. 架构模式选型：三条路径的深度对比
++
++### 路径 A：纯接口多态（Strategy Pattern）
++
++```
++ITag 接口 → 每个标签一个类 → 硬币持有 List<ITag>
++```
++
++**机制**：定义 `ITag` 接口，包含 `OnFlip()`, `OnLand()`, `OnScore()` 等方法。每个标签实现此接口。硬币在相应时机遍历标签列表调用。
++
++**优势**：
++- 概念简单，C# 开发者立即理解
++- 类型安全，编译期检查
++- 每个标签是独立的类，职责清晰
++
++**劣势**：
++- **接口膨胀**：随着触发时机增加，接口越来越大。大多数标签只关心 1-2 个时机，但必须实现所有方法（即使是空实现）
++- **遍历浪费**：每次触发都遍历所有标签，即使大多数标签对该事件不感兴趣
++- **扩展困难**：新增触发时机 = 修改接口 = 修改所有实现类
++
++**适用场景**：标签种类少（<10）、触发时机固定不变的小型系统。
++
++### 路径 B：ECS 风格（Entity-Component-System）
++
++```
++硬币 = Entity → 标签 = Component（纯数据）→ System 处理逻辑
++```
++
++**机制**：标签只是数据标记（可能带参数），独立的 System 类负责处理逻辑。例如 `GravitySystem` 查找所有带 `超重` 标签的硬币并修改质量。
++
++**优势**：
++- 数据与逻辑完全分离
++- System 可以高效批量处理同类标签
++- 新增标签类型成本极低（只是新数据）
++
++**劣势**：
++- **与 Godot 节点模型冲突**：Godot 的核心是节点树 + 信号，ECS 是另一套世界观。你会花大量时间在两套模型之间做桥接
++- **过度工程**：你的实体数量级是几十个硬币，不是几万个。ECS 的批量处理优势在这个规模下没有意义
++- **调试困难**：逻辑散布在各个 System 中，追踪一个标签的完整行为需要跨多个文件
++- **C# 生态不匹配**：没有成熟的 Godot C# ECS 框架，需要自建
++
++**适用场景**：实体数量巨大（>1000）、需要极致性能、团队熟悉 ECS 范式。
++
++### 路径 C：事件驱动的标签组件（Event-Driven Tag Components）— 推荐
++
++```
++标签 = 自包含组件（数据 + 行为）→ 通过事件总线接收触发 → 产出效果描述
++```
++
++**机制**：每个标签是一个自包含的组件，声明自己关心的事件类型，通过事件总线接收事件，产出效果描述或直接执行即时效果。
++
++**优势**：
++- **选择性订阅**：标签只订阅自己关心的事件，无接口膨胀
++- **松耦合**：标签之间不知道彼此存在，通过事件间接交互
++- **易扩展**：新增触发时机 = 新增事件类型，不影响现有标签
++- **与 Godot 协作良好**：事件总线可以桥接 Godot 信号，标签组件可以是节点也可以是纯 C# 对象
++- **可测试**：标签是纯 C# 对象，可以脱离 Godot 场景树单元测试
++
++**劣势**：
++- 事件总线是一个全局依赖，需要谨慎管理生命周期
++- 事件的定义和分发需要前期设计投入
++- 调试时需要追踪事件流（可通过日志缓解）
++
++**适用场景**：中等复杂度、需要高扩展性、实体数量适中的系统。**这正是你的场景。**
++
++### 选型决策矩阵
++
++| 维度 | 路径 A（接口） | 路径 B（ECS） | 路径 C（事件驱动） |
++|------|:---:|:---:|:---:|
++| 实现复杂度 | ★☆☆ | ★★★ | ★★☆ |
++| 扩展性 | ★☆☆ | ★★★ | ★★★ |
++| 与 Godot 契合度 | ★★☆ | ★☆☆ | ★★★ |
++| 涌现性支持 | ★★☆ | ★★★ | ★★★ |
++| 可测试性 | ★★☆ | ★★★ | ★★★ |
++| 调试友好度 | ★★★ | ★☆☆ | ★★☆ |
++| 你的项目适配度 | ★★☆ | ★☆☆ | ★★★ |
++
++---
++
++## 4. 推荐架构：事件驱动的标签组件系统
++
++### 4.1 概念模型
++
++```
++┌─────────────────────────────────────────────────────┐
++│                    Game World                        │
++│                                                     │
++│  ┌──────────┐    ┌──────────────┐    ┌───────────┐ │
++│  │ Physics  │───→│ Event Bridge │───→│ Event Bus │ │
++│  │  Layer   │    │ (翻译物理→  │    │ (分发游戏 │ │
++│  │(Coin.cs) │    │  游戏事件)   │    │   事件)   │ │
++│  └──────────┘    └──────────────┘    └─────┬─────┘ │
++│                                            │       │
++│                    ┌───────────────────────┐│       │
++│                    │                       ││       │
++│                    ▼                       ▼│       │
++│  ┌─────────────────────────────────────┐   │       │
++│  │            Coin Entity              │   │       │
++│  │  ┌───────┐ ┌───────┐ ┌───────┐     │   │       │
++│  │  │Tag A  │ │Tag B  │ │Tag C  │     │   │       │
++│  │  │(订阅  │ │(订阅  │ │(订阅  │     │   │       │
++│  │  │OnLand)│ │OnFlip)│ │OnScore│     │   │       │
++│  │  └───┬───┘ └───┬───┘ └───┬───┘     │   │       │
++│  │      │         │         │          │   │       │
++│  │      ▼         ▼         ▼          │   │       │
++│  │  ┌──────────────────────────────┐   │   │       │
++│  │  │    Tag Manager (per coin)    │   │   │       │
++│  │  │  - 管理标签生命周期          │   │   │       │
++│  │  │  - 路由事件到标签            │   │   │       │
++│  │  │  - 收集效果描述              │   │   │       │
++│  │  └──────────────────────────────┘   │   │       │
++│  └─────────────────────────────────────┘   │       │
++│                                            │       │
++│                    ┌───────────────────────┘│       │
++│                    ▼                        │       │
++│  ┌─────────────────────────────────────┐   │       │
++│  │        Settlement Pipeline          │   │       │
++│  │  1. 收集所有硬币的效果描述          │   │       │
++│  │  2. 按规则排序（加法先于乘法）      │   │       │
++│  │  3. 执行并计算最终得分              │   │       │
++│  │  4. 驱动结算动画                    │   │       │
++│  └─────────────────────────────────────┘   │       │
++│                                            │       │
++└────────────────────────────────────────────┘       │
++```
++
++### 4.2 核心抽象层次
++
++**第一层：事件定义（What happened）**
++
++游戏事件是标签系统的输入。每个事件携带上下文信息：
++
++- `CoinFlippedEvent` — 哪个硬币、翻转次数、力度
++- `CoinLandedEvent` — 哪个硬币、正面/反面/立起、落点位置
++- `CoinSettledEvent` — 哪个硬币、最终状态
++- `CoinHitEvent` — 哪个硬币被砸、被谁砸、碰撞力度
++- `CoinFellOffEvent` — 哪个硬币掉出场地
++- `ScorePhaseEvent` — 结算开始，携带当前场景快照
++- `RoundEndEvent` — 回合结束
++- `GameEndEvent` — 游戏结束
++
++**关键设计决策**：事件应该是**不可变的值对象**（struct 或 readonly record）。标签不能修改事件本身，只能基于事件产出响应。
++
++**第二层：标签行为（What to do）**
++
++标签声明自己关心的事件类型，并定义响应逻辑。响应可以是：
++
++- **效果描述**（用于结算）：`{ Chips +5 }`, `{ Mult ×2 }`
++- **即时动作**（用于物理/状态）：修改质量、施加力、生成硬币、移除标签
++- **状态查询修改**（用于被动效果）：修改硬币的有效属性
++
++**第三层：效果收集与执行（How to apply）**
++
++结算管线负责：
++1. 向所有硬币广播 `ScorePhaseEvent`
++2. 收集所有标签产出的效果描述
++3. 按规则排序和分组
++4. 执行并计算最终得分
++
++### 4.3 标签的内部结构模型
++
++一个标签应该包含以下维度的信息：
++
++```
++Tag
++├── Identity（身份 — 数据驱动）
++│   ├── Id: string          // 唯一标识，如 "fragile", "magnet"
++│   ├── DisplayName: string // 显示名
++│   ├── Description: string // 效果描述文本
++│   ├── Rarity: enum        // 常见/罕见
++│   ├── Polarity: enum      // 正面/负面/特殊
++│   └── Icon: Texture       // 图标资源引用
++│
++├── Behavior（行为 — 代码实现）
++│   ├── SubscribedEvents: EventType[]  // 关心的事件类型
++│   ├── OnEvent(event): Response       // 事件响应逻辑
++│   └── GetPassiveModifiers(): Modifier[] // 被动属性修改
++│
++└── Constraints（约束 — 数据驱动）
++    ├── Stackable: bool     // 是否可叠加
++    ├── MaxStacks: int      // 最大叠加数
++    ├── Exclusive: string[] // 互斥标签 ID 列表
++    └── SlotCost: int       // 占用标签槽数量
++```
++
++---
++
++## 5. 标签生命周期与触发时机模型
++
++### 5.1 触发时机的心智模型
++
++不要把触发时机想成"6 个固定的钩子"。更好的心智模型是**事件流上的过滤器**：
++
++```
++物理世界 ──→ [事件流] ──→ 标签 A（只看 OnLand）
++                    ├──→ 标签 B（只看 OnFlip, OnScore）
++                    ├──→ 标签 C（只看 OnHit）
++                    └──→ 标签 D（持续性，每帧/每次查询）
++```
++
++这个模型的好处是：
++- 新增触发时机 = 在事件流中新增事件类型，不影响现有标签
++- 一个标签可以订阅多个事件（如"生物"标签同时关心 OnHit 和被动查询）
++- 持续性效果不是特殊的，只是订阅了不同的事件（属性查询事件或帧更新事件）
++
++### 5.2 持续性标签的特殊处理
++
++"超重"（质量 ×10）和"尸体"（面值归零）是持续性效果。它们不响应离散事件，而是**修改硬币的有效属性**。
++
++推荐模式：**属性查询拦截**
++
++```
++硬币的有效质量 = 基础质量 × Π(所有标签的质量修饰符)
++硬币的有效面值 = 基础面值 + Σ(所有标签的面值修饰符)
++```
++
++实现方式：硬币暴露 `GetEffectiveMass()`, `GetEffectiveFaceValue()` 等方法，内部遍历标签收集修饰符。这比缓存更安全（参见原则 5）。
++
++### 5.3 标签的生命周期事件
++
++标签自身也有生命周期：
++
++- `OnAttached(coin)` — 标签被附着到硬币时（初始化、订阅事件）
++- `OnDetached(coin)` — 标签被移除时（清理、取消订阅）
++- `OnStackChanged(newCount)` — 叠加数变化时
++
++这些是标签系统内部的事件，不是游戏事件。它们确保标签可以正确地初始化和清理。
++
++### 5.4 触发时机与物理事件的映射
++
++这是你的项目中最需要仔细设计的部分，因为物理事件是异步的、不确定顺序的：
++
++| 游戏事件 | 物理来源 | 翻译逻辑 |
++|----------|----------|----------|
++| `CoinFlipped` | `Coin.ApplyFlip()` 被调用 | 直接触发，同步 |
++| `CoinLanded` | `Coin.IsSettled` 从 false 变为 true | 状态变化检测，需要去抖（你已有 `SettleTimeRequired`） |
++| `CoinHit` | `_on_body_entered` 碰撞信号 | 需要过滤：只有"被另一个运动中的硬币碰撞"才算"被砸" |
++| `CoinFellOff` | 位置超出场地边界 | 需要边界检测（Area3D 触发器或位置检查） |
++| `ScorePhase` | 所有硬币静止后，由 GameManager 触发 | 需要"全场静止检测"逻辑 |
++| `RoundEnd` | 结算完成后 | 由结算管线触发 |
++
++**关键注意**：`CoinHit` 的定义需要仔细考虑。物理引擎会产生大量碰撞事件（硬币与桌面、硬币与墙壁、硬币与硬币）。你需要定义清楚什么算"被砸"：
++
++- 只有硬币-硬币碰撞？
++- 需要碰撞力度超过阈值？
++- 被砸的硬币需要是静止的？还是运动中的也算？
++
++这些是游戏设计决策，但架构需要为这种过滤提供空间。建议在 Event Bridge 层做这个过滤。
++
++---
++
++## 6. 数据驱动层设计
++
++### 6.1 分层数据模型
++
++```
++┌─────────────────────────────────────┐
++│  Layer 1: Tag Definition (数据)     │
++│  JSON/Resource 文件                 │
++│  - id, name, description, rarity   │
++│  - behavior_id (关联代码)           │
++│  - parameters (行为参数)            │
++└──────────────┬──────────────────────┘
++               │
++               ▼
++┌─────────────────────────────────────┐
++│  Layer 2: Tag Behavior (代码)       │
++│  C# 类，通过 behavior_id 注册      │
++│  - 实现具体逻辑                     │
++│  - 接收 parameters 作为配置         │
++└──────────────┬──────────────────────┘
++               │
++               ▼
++┌─────────────────────────────────────┐
++│  Layer 3: Coin Template (数据)      │
++│  JSON/Resource 文件                 │
++│  - base_face_value, size, quality   │
++│  - inherent_tags: ["fragile", ...]  │
++│  - visual_preset: "bunny"           │
++└─────────────────────────────────────┘
++```
++
++### 6.2 Godot Resource vs JSON
++
++| 维度 | Godot Resource (.tres) | JSON |
++|------|:---:|:---:|
++| 编辑器集成 | ★★★ Inspector 直接编辑 | ★☆☆ 需要外部编辑器 |
++| 类型安全 | ★★★ C# 强类型 | ★☆☆ 需要手动反序列化 |
++| 版本控制友好 | ★★☆ 文本格式但 Godot 特有 | ★★★ 通用格式 |
++| 热重载 | ★★★ 编辑器内即时生效 | ★★☆ 需要手动重载 |
++| 非程序员编辑 | ★★☆ 需要 Godot 编辑器 | ★★★ 任何文本编辑器 |
++| 引用资源（纹理等） | ★★★ 原生支持 | ★☆☆ 需要路径字符串 |
++
++**推荐**：对于你的项目，**Godot Resource** 是更好的选择。原因：
++
++1. 你是独立开发者，不需要非程序员编辑数据
++2. 标签定义需要引用纹理/图标等 Godot 资源
++3. Inspector 编辑 + 热重载 = 极快的迭代速度
++4. C# 的 `[Export]` 属性提供类型安全
++
++具体来说：
++- `TagDefinition : Resource` — 标签的数据定义
++- `CoinTemplate : Resource` — 硬币模板的数据定义
++- 行为代码通过 `BehaviorId` 字符串关联到 C# 类（注册表模式）
++
++### 6.3 行为注册表模式
++
++这是连接数据层和代码层的关键机制：
++
++**心智模型**：想象一个字典，key 是字符串 ID，value 是"如何创建这个标签的行为实例"。
++
++```
++注册表 = {
++  "fragile" → () => new FragileBehavior(),
++  "heavy"   → () => new HeavyBehavior(),
++  "magnet"  → (params) => new MagnetBehavior(params.Radius, params.Force),
++  ...
++}
++```
++
++当硬币需要附着一个标签时：
++1. 从 `TagDefinition` 资源读取 `BehaviorId`
++2. 在注册表中查找对应的工厂方法
++3. 创建行为实例，传入参数
++4. 将行为实例附着到硬币的 TagManager
++
++**注册方式**：可以用 C# 的 Attribute + 反射自动注册，也可以手动注册。前者更优雅但有启动开销，后者更显式但需要维护注册代码。在你的项目规模下，两种都可以。
++
++### 6.4 参数化标签：同一行为，不同配置
++
++很多标签可以共享行为逻辑，只是参数不同：
++
++- "面值 +5" 和 "面值 +10" → 同一个 `FaceValueModifierBehavior(amount)`
++- "质量 ×10" 和 "质量 ×0.5" → 同一个 `MassModifierBehavior(multiplier)`
++- "落地后弹跳 1 次" 和 "落地后弹跳 3 次" → 同一个 `ExtraBounceBehavior(count)`
++
++这大幅减少了需要编写的行为类数量。`TagDefinition` 资源中包含一个 `Parameters` 字典，传递给行为构造函数。
++
++---
++
++## 7. 组合涌现性的架构保障
++
++### 7.1 涌现性的本质
++
++涌现性 = 简单规则的组合产生复杂行为。架构需要**不阻碍**涌现，而非**主动创造**涌现。
++
++**关键洞察**：涌现性的敌人是**特殊处理**。每当你写 `if (coin.HasTag("X") && coin.HasTag("Y")) { 特殊逻辑 }` 时，你就在用硬编码替代涌现。
++
++### 7.2 涌现友好的设计模式
++
++**模式 1：共享状态间接交互**
++
++标签不直接交互，而是通过修改共享状态间接影响彼此：
++
++```
++"超重" 标签 → 修改硬币质量 → 物理引擎自然处理
++"磁力" 标签 → 施加吸引力 → 物理引擎自然处理
++组合效果：超重硬币被磁力吸引时移动更慢 → 涌现！无需额外代码
++```
++
++**模式 2：事件链（Event Chaining）**
++
++一个标签的效果可以触发新的事件，被其他标签捕获：
++
++```
++"兔子" 标签 → OnLand → 生成小兔子硬币 → 触发 CoinSpawnedEvent
++"牧场主" 遗物 → 订阅 CoinSpawnedEvent → 如果生成的是生物，Mult +0.5
++组合效果：兔子 + 牧场主 = 每次落地都加倍率 → 涌现！
++```
++
++**模式 3：属性修饰符叠加**
++
++多个标签的属性修饰符自然叠加：
++
++```
++"面值 +5" + "面值 +3" = 面值 +8（加法叠加）
++"正面翻倍" + "正面翻倍" = 面值 ×4（乘法叠加）
++```
++
++这需要你的属性查询系统支持修饰符的有序叠加（先加后乘）。
++
++### 7.3 涌现性的边界：何时需要显式规则
++
++并非所有交互都应该是涌现的。有些情况需要显式规则：
++
++- **互斥标签**：某些标签不能共存（如"正面翻倍"和"反面翻倍"可能互斥）
++- **触发上限**：防止无限循环（标签 A 触发标签 B，标签 B 触发标签 A）
++- **优先级**：当两个标签的效果冲突时（如"面值归零"和"面值 +5"），需要明确优先级
++
++**处理方式**：
++- 互斥：在 `TagDefinition` 的 `Exclusive` 字段中声明
++- 循环防护：事件分发器维护一个"当前事件深度"计数器，超过阈值则停止
++- 优先级：效果描述携带优先级字段，结算管线按优先级排序执行
++
++### 7.4 "生物被砸死变尸体"的架构表达
++
++这是你设计文档中的核心涌现案例。让我们分析它如何在推荐架构中表达：
++
++```
++"生物" 标签的行为：
++  订阅事件：CoinHitEvent
++  响应逻辑：
++    if (碰撞力度 > 致死阈值) {
++      请求：移除自身标签 "creature"
++      请求：添加标签 "corpse" 到同一硬币
++      触发：CreatureKilledEvent(coin, killer)
++    }
++```
++
++注意：
++- "生物"标签不知道"尸体"标签的实现细节，只知道它的 ID
++- 移除/添加标签通过 TagManager 的公共 API
++- 触发 `CreatureKilledEvent` 允许其他系统响应（如成就、音效、视觉效果）
++- 任何带有"生物"标签的硬币都自动获得这个行为——这就是涌现
++
++---
++
++## 8. 结算管线：有序的混沌
++
++### 8.1 为什么结算需要管线
++
++你的得分公式是 `Chips × Mult`，其中：
++- Chips = Σ(各硬币面值 + 标签加成)
++- Mult = 1.0 + Σ(加法倍率) 然后 × Π(乘法倍率)
++
++这意味着效果的**类型**（加法/乘法）和**应用顺序**（先加后乘）至关重要。标签不能自己决定何时执行效果——需要一个中央管线来编排。
++
++### 8.2 管线阶段
++
++```
++结算管线
++│
++├── Phase 1: 收集（Collect）
++│   ├── 遍历每个硬币
++│   ├── 向每个硬币的标签广播 ScorePhaseEvent
++│   ├── 收集所有效果描述（ScoreModifier）
++│   └── 每个 ScoreModifier 包含：来源硬币、类型（Chips/Mult）、
++│       操作（Add/Multiply）、值、优先级
++│
++├── Phase 2: 排序（Sort）
++│   ├── 按硬币顺序（可能是位置从左到右，用于动画）
++│   ├── 同一硬币内按优先级
++│   └── 同一优先级内：加法先于乘法
++│
++├── Phase 3: 执行（Execute）
++│   ├── 初始化 totalChips = 0, totalMult = 1.0
++│   ├── 逐个硬币计算贡献
++│   │   ├── chipContribution = effectiveFaceValue + Σ(chip加法修饰)
++│   │   ├── multContribution = Σ(mult加法修饰)
++│   │   ├── totalChips += chipContribution
++│   │   └── totalMult += multContribution
++│   ├── 应用乘法修饰符
++│   │   └── totalMult *= Π(mult乘法修饰)
++│   └── finalScore = totalChips × totalMult
++│
++├── Phase 4: 演出（Present）
++│   ├── 逐个硬币播放计分动画
++│   ├── 显示每个硬币的 Chips 和 Mult 贡献
++│   └── 最终得分揭示
++│
++└── Phase 5: 后处理（PostProcess）
++    ├── 触发 RoundEndEvent
++    ├── 处理"虚无"标签（移除标记的硬币）
++    └── 处理"脆弱"标签（移除标记的硬币）
++```
++
++### 8.3 效果描述的数据结构
++
++效果描述应该是一个简单的值对象：
++
++```
++ScoreModifier
++├── Source: CoinReference    // 来源硬币（用于动画定位）
++├── Target: enum {Chips, Mult}
++├── Operation: enum {Add, Multiply}
++├── Value: float
++├── Priority: int            // 执行优先级（默认 0）
++├── Condition: Func<bool>?   // 可选的条件（如"正面朝上时"）
++└── Description: string      // 用于 UI 显示（如"+5 Chips from 正面翻倍"）
++```
++
++**注意 Condition 字段**：像"正面翻倍"这样的标签，效果是有条件的。条件应该在收集阶段评估（因为此时硬币状态已确定），而不是在执行阶段。这样可以在演出阶段准确显示哪些效果被激活了。
++
++---
++
++## 9. 与 Godot 节点树的协作模式
++
++### 9.1 核心决策：标签是节点还是纯 C# 对象？
++
++| 方案 | 标签作为 Node | 标签作为纯 C# 对象 |
++|------|:---:|:---:|
++| 可在编辑器中查看 | ✅ 场景树可见 | ❌ 需要自定义调试面板 |
++| 利用 Godot 信号 | ✅ 原生支持 | ❌ 需要自建事件系统 |
++| 序列化/保存 | ✅ 随场景保存 | ⚠️ 需要自定义序列化 |
++| 性能 | ⚠️ 节点有开销 | ✅ 轻量 |
++| 单元测试 | ⚠️ 需要 SceneTree | ✅ 纯 C# 测试 |
++| 动态创建/销毁 | ⚠️ 节点生命周期复杂 | ✅ 简单 new/dispose |
++
++**推荐**：**标签作为纯 C# 对象**，由一个 **Node 类型的 TagManager** 管理。
++
++理由：
++1. 标签会频繁创建/销毁（脆弱标签、虚无标签），Node 的生命周期管理（`AddChild`/`RemoveChild`/`QueueFree`）对于这种高频操作过于重量级
++2. 标签数量可能很多（传说硬币 3 个标签 × 几十个硬币 = 上百个标签），纯 C# 对象更轻量
++3. 单元测试对标签系统至关重要（组合涌现性需要大量测试），纯 C# 对象可以脱离 Godot 测试
++4. TagManager 作为 Node 挂在 Coin 节点下，负责桥接 Godot 世界和标签世界
++
++### 9.2 推荐的节点结构
++
++```
++Coin (RigidBody3D) — 物理行为
++├── MeshInstance3D — 视觉
++├── CollisionShape3D — 碰撞
++├── TagManager (Node) — 标签管理
++│   └── 内部持有 List<ITagBehavior>（纯 C# 对象）
++└── CoinEventBridge (Node) — 物理事件翻译
++    └── 监听物理信号，转化为游戏事件
++```
++
++### 9.3 事件总线的实现选择
++
++**选项 A：Godot 信号（Signals）**
++
++- 优势：Godot 原生，编辑器可见，支持跨语言
++- 劣势：信号参数类型不安全（Variant），不支持返回值，不适合收集效果描述
++
++**选项 B：C# 事件（event/delegate）**
++
++- 优势：类型安全，支持返回值，C# 开发者熟悉
++- 劣势：需要手动管理订阅/取消订阅，不在 Godot 编辑器中可见
++
++**选项 C：自定义事件总线（推荐）**
++
++- 一个轻量级的 C# 类，提供 `Subscribe<TEvent>(handler)` 和 `Publish<TEvent>(event)` 方法
++- 内部用 `Dictionary<Type, List<Delegate>>` 实现
++- 支持类型安全的事件分发
++- 可以添加日志、调试、性能监控
++- TagManager 在 `OnAttached` 时订阅，`OnDetached` 时取消订阅
++
++**与 Godot 信号的桥接**：`CoinEventBridge` 节点订阅 Godot 物理信号，翻译后发布到 C# 事件总线。这样标签系统完全不依赖 Godot 信号。
++
++---
++
++## 10. 权衡矩阵总览
++
++### 10.1 架构决策权衡
++
++| 决策点 | 选项 A | 选项 B | 推荐 | 推荐理由 |
++|--------|--------|--------|:---:|----------|
++| 标签载体 | Node 子节点 | 纯 C# 对象 | **B** | 轻量、可测试、高频创建/销毁友好 |
++| 事件机制 | Godot 信号 | C# 事件总线 | **B** | 类型安全、支持效果收集 |
++| 数据格式 | JSON | Godot Resource | **B** | 编辑器集成、资源引用、热重载 |
++| 效果执行 | 即时执行 | 收集后管线执行 | **B** | 支持先加后乘、支持结算动画 |
++| 属性计算 | 缓存 + dirty flag | 实时查询 | **B** | 简单可靠，规模不需要缓存 |
++| 标签间通信 | 直接引用 | 通过事件/共享状态 | **B** | 保持松耦合，支持涌现性 |
++| 行为定义 | 纯数据 DSL | 代码 + 数据混合 | **B** | 平衡表达力和迭代速度 |
++
++### 10.2 原则间的张力
++
++| 张力 | 何时偏向左侧 | 何时偏向右侧 |
++|------|-------------|-------------|
++| **原子性 vs 协作性** | 大多数标签：保持独立 | 少数"元标签"（如生物→尸体转换）：允许通过 TagManager API 协作 |
++| **数据驱动 vs 代码灵活** | 简单数值修改标签：纯数据 | 复杂逻辑标签（兔子、磁力）：代码实现 |
++| **涌现性 vs 可控性** | 正面标签组合：拥抱涌现 | 负面/Boss 标签：可能需要显式互斥规则 |
++| **实时查询 vs 缓存** | 默认：实时查询 | 如果 profiler 显示瓶颈：引入缓存 |
++| **Godot 原生 vs 纯 C#** | 视觉/物理/编辑器交互：用 Godot | 逻辑/数据/测试：用纯 C# |
++
++---
++
++## 11. 反模式警示
++
++### 反模式 1：上帝标签管理器
++
++**症状**：一个巨大的 `TagSystem` 类，包含所有标签的逻辑，用 switch-case 分发。
++
++**为什么有害**：每新增一个标签都要修改这个类，违反开闭原则。当标签数量超过 20 个时，这个类会变成维护噩梦。
++
++**正确做法**：每个标签的行为封装在自己的类中，TagManager 只负责生命周期管理和事件路由。
++
++### 反模式 2：标签间直接依赖
++
++**症状**：`MagnetBehavior` 类中 `import FragileBehavior`，直接检查目标硬币是否有脆弱标签。
++
++**为什么有害**：创建了隐式耦合，破坏了组合自由度。如果脆弱标签被重命名或重构，磁力标签也要改。
++
++**正确做法**：如果磁力标签需要知道目标硬币的某个属性，通过硬币的公共查询接口（如 `coin.HasTagWithProperty("breakable")`），而非直接引用具体标签类型。
++
++### 反模式 3：在物理回调中执行游戏逻辑
++
++**症状**：在 `_IntegrateForces` 或碰撞回调中直接触发标签效果、修改游戏状态。
++
++**为什么有害**：物理回调在物理步进中执行，此时修改节点树（如生成新硬币、移除硬币）可能导致崩溃或未定义行为。而且物理回调的执行顺序不确定。
++
++**正确做法**：物理回调只记录事件（"发生了碰撞"），在 `_Process` 或 `_PhysicsProcess` 的安全时机批量处理。使用队列模式：物理回调入队，主循环出队处理。
++
++### 反模式 4：过早泛化
++
++**症状**：在只有 3 个标签时就设计了支持 Lua 脚本的标签行为系统。
++
++**为什么有害**：你不知道未来的标签需要什么能力。过早泛化会锁定错误的抽象，后期修改成本更高。
++
++**正确做法**：先用最简单的方式实现前 10 个标签。当你发现重复模式时，再提取抽象。"三次法则"——同样的模式出现三次时才值得抽象。
++
++### 反模式 5：忽略执行顺序
++
++**症状**：标签效果的执行顺序取决于 `List<ITag>` 的遍历顺序（即标签的添加顺序），导致同样的标签组合在不同情况下产生不同结果。
++
++**为什么有害**：玩家无法预测结果，破坏策略深度。"正面翻倍"+"面值 +5" 的结果不应该取决于哪个标签先被附着。
++
++**正确做法**：效果描述携带类型和优先级，结算管线按规则排序后执行。标签的添加顺序不影响最终结果。
++
++---
++
++## 12. 渐进式实施路径
++
++基于你的 Milestone 2 计划，以下是推荐的实施顺序：
++
++### Step 1：最小事件系统（1 天）
++
++- 实现一个简单的 C# 事件总线（`Subscribe<T>`, `Publish<T>`）
++- 定义 2-3 个核心事件类型（`CoinFlippedEvent`, `CoinSettledEvent`, `ScorePhaseEvent`）
++- 在 `Coin.cs` 中添加 `CoinEventBridge` 逻辑（状态变化时发布事件）
++- **验证**：能在控制台看到事件被发布和接收
++
++### Step 2：标签框架骨架（1-2 天）
++
++- 定义 `ITagBehavior` 接口（最小化：`OnAttached`, `OnDetached`, `HandleEvent`）
++- 实现 `TagManager`（附着、移除、事件路由）
++- 实现 `TagDefinition : Resource`（id, name, behavior_id）
++- 实现行为注册表（手动注册即可）
++- **验证**：能给硬币附着一个空标签，标签能接收到事件
++
++### Step 3：第一批标签（2-3 天）
++
++按复杂度递增实现：
++
++1. **尸体**（最简单：被动属性修改，面值归零）
++2. **超重**（被动属性修改，质量 ×10）
++3. **脆弱**（响应 CoinFlippedEvent，移除自身所在硬币）
++4. **虚无**（响应 RoundEndEvent，移除自身所在硬币）
++5. **生物**（响应 CoinHitEvent，标签转换：移除自身 + 添加尸体）
++6. **回归**（响应 CoinFellOffEvent，传送回场地）
++7. **再弹跳**（响应 CoinSettledEvent，施加额外冲量）
++8. **正面翻倍**（结算时产出条件性 ScoreModifier）
++
++每实现一个标签，都验证它与之前标签的组合是否正常工作。
++
++### Step 4：结算管线（1-2 天）
++
++- 实现 ScoreModifier 数据结构
++- 实现结算管线的收集和执行阶段
++- 用"正面翻倍"标签验证条件性效果
++- **验证**：双乘区计算正确，先加后乘
++
++### Step 5：硬币工厂 + 数据驱动（1 天）
++
++- 实现 `CoinTemplate : Resource`
++- 实现硬币工厂（根据模板生成硬币 + 附着固有标签）
++- 定义小兔子硬币模板作为验证
++- **验证**：小兔子硬币的完整生命周期
++
++### Step 6：复杂标签（1-2 天）
++
++- **磁力**（需要空间查询 + 物理力）
++- **兔子**（需要硬币工厂 + 动态生成）
++- 这两个标签会检验你的架构是否足够灵活
++
++---
++
++## 附录 A：关于"持续性"标签的补充思考
++
++你的设计文档列出了 6 种触发时机，其中"持续性"比较特殊。建议将"持续性"进一步细分为：
++
++1. **被动属性修饰**（如超重、尸体）：不响应事件，而是在属性查询时生效
++2. **持续物理效果**（如磁力的吸引力场）：需要每帧执行，可以订阅 `FrameTickEvent`
++3. **条件触发**（如"场上每有一个生物硬币，Mult +0.5"）：在结算时查询场景状态
++
++这三种"持续性"的实现方式不同，不应该用同一个机制处理。
++
++## 附录 B：关于测试策略的建议
++
++标签系统的组合涌现性意味着你无法穷举所有组合。推荐的测试策略：
++
++1. **单元测试每个标签的独立行为**：给定事件，验证产出的效果描述
++2. **集成测试关键组合**：小兔子生命周期、正面翻倍 + 面值修改、生物 + 被砸
++3. **属性测试（Property-based Testing）**：随机生成标签组合，验证不变量（如"得分永远 ≥ 0"、"不会无限循环"）
++4. **回放测试**：记录游戏事件序列，可以重放验证确定性
++
++因为标签是纯 C# 对象，所有这些测试都可以脱离 Godot 引擎运行，这是架构选择的重要红利。
++
++## 附录 C：关于事件循环防护的具体建议
++
++当标签 A 的效果触发事件 X，而标签 B 订阅了事件 X 并触发事件 Y，标签 A 又订阅了事件 Y... 这就形成了潜在的无限循环。
++
++防护机制：
++1. **深度计数器**：事件总线维护当前分发深度，超过阈值（如 10）时停止并记录警告
++2. **事件溯源**：每个事件携带 `CausedBy` 链，可以检测循环
++3. **阶段隔离**：某些事件只在特定阶段可以触发（如 `CoinSpawnedEvent` 不能在结算阶段触发）
++
++推荐从最简单的深度计数器开始，遇到实际问题时再升级。
++
++---
++
++> **总结**：你的标签系统本质上是一个**微型规则引擎**。核心架构选择是"事件驱动的标签组件 + 效果收集管线"。保持标签的原子性和独立性是涌现性的基础。数据驱动用于标签身份和简单参数，代码用于复杂行为。与 Godot 的协作通过 TagManager 节点桥接，标签本身保持为纯 C# 对象以确保可测试性。先实现最简单的标签验证架构，再逐步增加复杂度。
+diff --git a/resources/coin_data/bunny.tres b/resources/coin_data/bunny.tres
+new file mode 100644
+index 0000000..f9b92ae
+--- /dev/null
++++ b/resources/coin_data/bunny.tres
+@@ -0,0 +1,14 @@
++[gd_resource type="Resource" script_class="CoinDefinition" load_steps=2 format=3]
++
++[ext_resource type="Script" path="res://scripts/coin/CoinDefinition.cs" id="1"]
++
++[resource]
++script = ExtResource("1")
++DefinitionId = "bunny"
++DisplayName = "小兔子"
++FaceValue = 1
++Quality = 1
++SizeScale = 0.4
++Mass = 0.1
++IntrinsicTagIds = PackedStringArray("void", "fragile", "creature")
++AlbedoColor = Color(0.9, 0.8, 0.7, 1)
+diff --git a/resources/coin_data/bunny_corpse.tres b/resources/coin_data/bunny_corpse.tres
+new file mode 100644
+index 0000000..95b119b
+--- /dev/null
++++ b/resources/coin_data/bunny_corpse.tres
+@@ -0,0 +1,14 @@
++[gd_resource type="Resource" script_class="CoinDefinition" load_steps=2 format=3]
++
++[ext_resource type="Script" path="res://scripts/coin/CoinDefinition.cs" id="1"]
++
++[resource]
++script = ExtResource("1")
++DefinitionId = "bunny_corpse"
++DisplayName = "小兔子尸体"
++FaceValue = 1
++Quality = 1
++SizeScale = 0.4
++Mass = 0.1
++IntrinsicTagIds = PackedStringArray("void", "fragile", "corpse")
++AlbedoColor = Color(0.5, 0.45, 0.4, 1)
+diff --git a/resources/coin_data/obsidian.tres b/resources/coin_data/obsidian.tres
+new file mode 100644
+index 0000000..7d76512
+--- /dev/null
++++ b/resources/coin_data/obsidian.tres
+@@ -0,0 +1,14 @@
++[gd_resource type="Resource" script_class="CoinDefinition" load_steps=2 format=3]
++
++[ext_resource type="Script" path="res://scripts/coin/CoinDefinition.cs" id="1"]
++
++[resource]
++script = ExtResource("1")
++DefinitionId = "obsidian"
++DisplayName = "黑曜石"
++FaceValue = 10
++Quality = 1
++SizeScale = 1.0
++Mass = 0.5
++IntrinsicTagIds = PackedStringArray("void", "heavy")
++AlbedoColor = Color(0.15, 0.1, 0.2, 1)
+diff --git a/resources/coin_data/standard_copper.tres b/resources/coin_data/standard_copper.tres
+new file mode 100644
+index 0000000..d35c06c
+--- /dev/null
++++ b/resources/coin_data/standard_copper.tres
+@@ -0,0 +1,14 @@
++[gd_resource type="Resource" script_class="CoinDefinition" load_steps=2 format=3]
++
++[ext_resource type="Script" path="res://scripts/coin/CoinDefinition.cs" id="1"]
++
++[resource]
++script = ExtResource("1")
++DefinitionId = "standard_copper"
++DisplayName = "铜币"
++FaceValue = 1
++Quality = 1
++SizeScale = 1.0
++Mass = 0.5
++IntrinsicTagIds = PackedStringArray()
++AlbedoColor = Color(0.85, 0.65, 0.13, 1)
+diff --git a/scripts/coin/Coin.cs b/scripts/coin/Coin.cs
+index 4f7fb91..6df15f0 100644
+--- a/scripts/coin/Coin.cs
++++ b/scripts/coin/Coin.cs
+@@ -2,7 +2,7 @@ using Godot;
+ 
+ /// <summary>
+ /// 硬币基础类。管理单个硬币的物理行为和状态判定。
+-/// 服务于 Milestone 1：核心物理原型。
++/// 服务于 Milestone 1 + 2：核心物理原型 + 标签系统集成。
+ /// 
+ /// 物理参数分工：
+ /// - Godot 原生属性（mass, linear_damp, angular_damp, friction, bounce）在 Coin.tscn 中配置
+@@ -15,12 +15,17 @@ using Godot;
+ /// - 立起来判定
+ /// - 翻转次数计数（累计旋转角度 / 360°）
+ /// - 各向异性角阻尼（模拟真实进动效果）
++/// - 标签管理（通过 TagManager）
++/// - 事件桥接（物理状态变化 → 游戏事件）
+ /// </summary>
+ public partial class Coin : RigidBody3D
+ {
+     /// <summary>硬币面值</summary>
+     [Export] public int FaceValue { get; set; } = 1;
+ 
++    /// <summary>硬币品质</summary>
++    [Export] public CoinQuality Quality { get; set; } = CoinQuality.Normal;
++
+     /// <summary>旋转冲量倍率，控制翻转速度</summary>
+     [Export] public float TorqueMultiplier { get; set; } = 3f;
+ 
+@@ -60,33 +65,55 @@ public partial class Coin : RigidBody3D
+     /// <summary>翻转力度的最小值，防止力度过小导致硬币几乎不动</summary>
+     [Export] public float MinFlipForce { get; set; } = 0.5f;
+ 
++    /// <summary>掉出场地的 Y 坐标阈值</summary>
++    [Export] public float FallOffY { get; set; } = -5f;
++
++    /// <summary>标签管理器</summary>
++    public TagManager Tags { get; private set; }
++
+     // 内部状态
+     private float _settleTimer;
+     private bool _isAirborne;
+     private float _cumulativeRotation;
+     private Vector3 _previousUp;
++    private bool _wasSettled;
++    private Vector3 _lastValidPosition;
+ 
+     public override void _Ready()
+     {
+         _previousUp = GlobalTransform.Basis.Y;
++        _lastValidPosition = GlobalPosition;
++
++        // 初始化标签管理器
++        Tags = new TagManager(this, GameServices.EventBus);
++        Tags.Quality = Quality;
++
++        // 连接碰撞信号（用于 CoinHitEvent）
++        BodyEntered += OnBodyEntered;
+     }
+ 
+     public override void _PhysicsProcess(double delta)
+     {
+         UpdateSettleDetection((float)delta);
+         UpdateFlipTracking();
++        UpdateFallOffDetection();
++
+         if (IsSettled)
+         {
+             UpdateFaceDetection();
+             UpdateStandingDetection();
+         }
++
++        // 记录有效位置（用于掉出场地时的回归）
++        if (GlobalPosition.Y > FallOffY)
++        {
++            _lastValidPosition = GlobalPosition;
++        }
+     }
+ 
+     public override void _IntegrateForces(PhysicsDirectBodyState3D state)
+     {
+         // 各向异性角阻尼：模拟真实硬币的进动效果
+-        // 绕硬币自身 Y 轴（法线方向）的旋转衰减慢
+-        // 绕硬币自身 X/Z 轴（径向）的旋转衰减快
+         if (!_isAirborne) return;
+ 
+         Vector3 localAngVel = GlobalTransform.Basis.Inverse() *
+@@ -109,6 +136,7 @@ public partial class Coin : RigidBody3D
+     {
+         // 重置状态
+         IsSettled = false;
++        _wasSettled = false;
+         _settleTimer = 0f;
+         _isAirborne = true;
+         _cumulativeRotation = 0f;
+@@ -136,48 +164,96 @@ public partial class Coin : RigidBody3D
+         }
+         else
+         {
++            // 点击中心：随机方向旋转
+             Vector3 randomAxis = new Vector3(
+                 (float)GD.RandRange(-1, 1), 0,
+                 (float)GD.RandRange(-1, 1)).Normalized();
+-            ApplyTorqueImpulse(randomAxis * force * CenterClickTorqueRatio);
++            float torqueMag = force * TorqueMultiplier
++                * CenterClickTorqueRatio;
++            ApplyTorqueImpulse(randomAxis * torqueMag);
+         }
++
++        // 发布翻转事件
++        GameServices.EventBus?.Publish(new CoinFlippedEvent
++        {
++            Coin = this,
++            Force = force,
++            HitPoint = hitPoint,
++        });
+     }
+ 
+-    private void UpdateSettleDetection(float delta)
++    /// <summary>获取硬币的有效面值（考虑标签修饰）</summary>
++    public int GetEffectiveFaceValue()
++    {
++        // 如果有尸体标签，面值归零
++        if (Tags != null && Tags.HasTag(TagIds.Corpse))
++            return 0;
++        return FaceValue;
++    }
++
++    /// <summary>获取硬币的有效质量倍率（考虑标签修饰）</summary>
++    public float GetMassMultiplier()
+     {
+-        if (IsSettled) return;
++        if (Tags != null && Tags.HasTag(TagIds.Heavy))
++            return 10f;
++        return 1f;
++    }
++
++    #region 物理检测
+ 
+-        bool isSlow =
+-            LinearVelocity.Length() < SettleLinearThreshold
+-            && AngularVelocity.Length() < SettleAngularThreshold;
++    private void UpdateSettleDetection(float delta)
++    {
++        bool isSlow = LinearVelocity.LengthSquared()
++            < SettleLinearThreshold * SettleLinearThreshold
++            && AngularVelocity.LengthSquared()
++            < SettleAngularThreshold * SettleAngularThreshold;
+ 
+         if (isSlow)
+         {
+             _settleTimer += delta;
+-            if (_settleTimer >= SettleTimeRequired)
++            if (_settleTimer >= SettleTimeRequired && !IsSettled)
+             {
+                 IsSettled = true;
+                 _isAirborne = false;
++
++                // 仅在从运动变为静止时发布事件（避免重复）
++                if (!_wasSettled)
++                {
++                    _wasSettled = true;
++                    UpdateFaceDetection();
++                    UpdateStandingDetection();
++
++                    GameServices.EventBus?.Publish(new CoinSettledEvent
++                    {
++                        Coin = this,
++                        IsFaceUp = IsFaceUp,
++                        IsStanding = IsStanding,
++                        FlipCount = FlipCount,
++                    });
++                }
+             }
+         }
+         else
+         {
+             _settleTimer = 0f;
++            if (IsSettled)
++            {
++                IsSettled = false;
++                _wasSettled = false;
++            }
+         }
+     }
+ 
+     private void UpdateFaceDetection()
+     {
+-        float dot = GlobalTransform.Basis.Y.Dot(Vector3.Up);
+-        IsFaceUp = dot > 0;
++        IsFaceUp = GlobalTransform.Basis.Y.Dot(Vector3.Up) > 0;
+     }
+ 
+     private void UpdateStandingDetection()
+     {
+-        float dot = Mathf.Abs(
+-            GlobalTransform.Basis.Y.Dot(Vector3.Up));
+-        float angleDeg = Mathf.RadToDeg(Mathf.Acos(dot));
+-        IsStanding = angleDeg > StandingAngleThreshold;
++        float angle = Mathf.RadToDeg(
++            GlobalTransform.Basis.Y.AngleTo(Vector3.Up));
++        IsStanding = angle > StandingAngleThreshold;
+     }
+ 
+     private void UpdateFlipTracking()
+@@ -185,11 +261,47 @@ public partial class Coin : RigidBody3D
+         if (!_isAirborne) return;
+ 
+         Vector3 currentUp = GlobalTransform.Basis.Y;
+-        float dot = Mathf.Clamp(
+-            _previousUp.Dot(currentUp), -1f, 1f);
++        float dot = _previousUp.Dot(currentUp);
++        dot = Mathf.Clamp(dot, -1f, 1f);
+         float angleDelta = Mathf.RadToDeg(Mathf.Acos(dot));
++
+         _cumulativeRotation += angleDelta;
+         FlipCount = (int)(_cumulativeRotation / 360f);
+         _previousUp = currentUp;
+     }
++
++    private void UpdateFallOffDetection()
++    {
++        if (GlobalPosition.Y < FallOffY)
++        {
++            GameServices.EventBus?.Publish(new CoinFellOffEvent
++            {
++                Coin = this,
++                LastPosition = _lastValidPosition,
++            });
++        }
++    }
++
++    /// <summary>碰撞信号处理：当其他硬币碰到本硬币时发布 CoinHitEvent</summary>
++    private void OnBodyEntered(Node body)
++    {
++        if (body is Coin hitter && hitter != this)
++        {
++            // 计算碰撞力度（用相对速度近似）
++            float impactForce = (hitter.LinearVelocity - LinearVelocity).Length();
++
++            // 仅在碰撞力度超过阈值时触发（避免静止接触误触发）
++            if (impactForce > 0.5f)
++            {
++                GameServices.EventBus?.Publish(new CoinHitEvent
++                {
++                    Target = this,
++                    Hitter = hitter,
++                    ImpactForce = impactForce,
++                });
++            }
++        }
++    }
++
++    #endregion
+ }
+diff --git a/scripts/coin/CoinDefinition.cs b/scripts/coin/CoinDefinition.cs
+new file mode 100644
+index 0000000..fe0a8cc
+--- /dev/null
++++ b/scripts/coin/CoinDefinition.cs
+@@ -0,0 +1,39 @@
++using Godot;
++
++/// <summary>
++/// 硬币定义资源。数据驱动的硬币模板，定义硬币的基础属性和固有标签。
++/// 通过 Godot Resource 系统实现，可在编辑器中创建和编辑 .tres 文件。
++/// 
++/// 硬币 = 基础属性（面值、大小、品质）+ 固有标签列表
++/// 
++/// 服务于 Milestone 2：标签系统核心。
++/// </summary>
++[GlobalClass]
++public partial class CoinDefinition : Resource
++{
++    /// <summary>硬币定义的唯一 ID（如 "bunny", "obsidian"）</summary>
++    [Export] public string DefinitionId { get; set; } = "";
++
++    /// <summary>硬币显示名称</summary>
++    [Export] public string DisplayName { get; set; } = "硬币";
++
++    /// <summary>硬币面值</summary>
++    [Export] public int FaceValue { get; set; } = 1;
++
++    /// <summary>硬币品质</summary>
++    [Export] public CoinQuality Quality { get; set; } = CoinQuality.Normal;
++
++    /// <summary>硬币大小缩放（1.0 = 标准大小）</summary>
++    [Export] public float SizeScale { get; set; } = 1.0f;
++
++    /// <summary>硬币质量（物理属性）</summary>
++    [Export] public float Mass { get; set; } = 0.5f;
++
++    /// <summary>
++    /// 固有标签 ID 列表。这些标签在硬币创建时自动附着，不受品质槽位限制。
++    /// </summary>
++    [Export] public string[] IntrinsicTagIds { get; set; } = System.Array.Empty<string>();
++
++    /// <summary>硬币颜色（临时，后续替换为纹理/材质）</summary>
++    [Export] public Color AlbedoColor { get; set; } = new Color(0.85f, 0.65f, 0.13f, 1f);
++}
+diff --git a/scripts/coin/CoinFactory.cs b/scripts/coin/CoinFactory.cs
+new file mode 100644
+index 0000000..9320312
+--- /dev/null
++++ b/scripts/coin/CoinFactory.cs
+@@ -0,0 +1,142 @@
++using Godot;
++
++/// <summary>
++/// 硬币工厂。根据 CoinDefinition 生成硬币实例。
++/// 负责：加载硬币场景模板 → 设置属性 → 附着固有标签。
++/// 
++/// 服务于 Milestone 2：标签系统核心。
++/// </summary>
++public static class CoinFactory
++{
++    /// <summary>硬币场景模板路径</summary>
++    private const string CoinScenePath = "res://scenes/coin/Coin.tscn";
++
++    /// <summary>缓存的硬币场景模板</summary>
++    private static PackedScene _coinScene;
++
++    /// <summary>
++    /// 根据 CoinDefinition 创建硬币实例。
++    /// </summary>
++    /// <param name="definition">硬币定义</param>
++    /// <returns>配置好的硬币实例（尚未添加到场景树）</returns>
++    public static Coin CreateCoin(CoinDefinition definition)
++    {
++        var coin = InstantiateCoinScene();
++        if (coin == null) return null;
++
++        // 设置基础属性
++        coin.Name = definition.DisplayName;
++        coin.FaceValue = definition.FaceValue;
++        coin.Quality = definition.Quality;
++        coin.Mass = definition.Mass;
++
++        // 设置大小缩放
++        if (!Mathf.IsEqualApprox(definition.SizeScale, 1.0f))
++        {
++            coin.Scale = Vector3.One * definition.SizeScale;
++        }
++
++        // 设置颜色（临时方案）
++        var mesh = coin.GetNodeOrNull<MeshInstance3D>("MeshInstance3D");
++        if (mesh != null)
++        {
++            var material = new StandardMaterial3D();
++            material.AlbedoColor = definition.AlbedoColor;
++            material.Metallic = 0.8f;
++            material.Roughness = 0.3f;
++            mesh.SetSurfaceOverrideMaterial(0, material);
++        }
++
++        return coin;
++    }
++
++    /// <summary>
++    /// 为硬币附着固有标签。必须在硬币添加到场景树并调用 _Ready() 之后调用，
++    /// 因为 Tags (TagManager) 在 _Ready() 中初始化。
++    /// </summary>
++    /// <param name="coin">已添加到场景树的硬币</param>
++    /// <param name="definition">硬币定义</param>
++    public static void ApplyIntrinsicTags(Coin coin, CoinDefinition definition)
++    {
++        if (coin.Tags == null)
++        {
++            GD.PrintErr($"[CoinFactory] {coin.Name}: Tags 未初始化，请确保硬币已添加到场景树");
++            return;
++        }
++
++        coin.Tags.Quality = definition.Quality;
++
++        foreach (var tagId in definition.IntrinsicTagIds)
++        {
++            var behavior = TagRegistry.Create(tagId);
++            if (behavior != null)
++            {
++                coin.Tags.AddIntrinsicTag(behavior);
++            }
++        }
++    }
++
++    /// <summary>
++    /// 创建小兔子硬币（快捷方法）。
++    /// 小兔子 = 面值1 + 极小 + {虚无, 脆弱, 生物}
++    /// </summary>
++    public static Coin CreateBunnyCoin()
++    {
++        var definition = new CoinDefinition
++        {
++            DefinitionId = "bunny",
++            DisplayName = "小兔子",
++            FaceValue = 1,
++            Quality = CoinQuality.Normal,
++            SizeScale = 0.4f,
++            Mass = 0.1f,
++            IntrinsicTagIds = new[] { TagIds.Void, TagIds.Fragile, TagIds.Creature },
++            AlbedoColor = new Color(0.9f, 0.8f, 0.7f, 1f), // 浅棕色
++        };
++
++        return CreateCoin(definition);
++    }
++
++    /// <summary>
++    /// 创建黑曜石硬币（Boss 盲注用，快捷方法）。
++    /// 黑曜石 = 面值10 + 中等 + {虚无, 超重}
++    /// </summary>
++    public static Coin CreateObsidianCoin()
++    {
++        var definition = new CoinDefinition
++        {
++            DefinitionId = "obsidian",
++            DisplayName = "黑曜石",
++            FaceValue = 10,
++            Quality = CoinQuality.Normal,
++            SizeScale = 1.0f,
++            Mass = 0.5f,
++            IntrinsicTagIds = new[] { TagIds.Void, TagIds.Heavy },
++            AlbedoColor = new Color(0.15f, 0.1f, 0.2f, 1f), // 深紫黑色
++        };
++
++        return CreateCoin(definition);
++    }
++
++    /// <summary>实例化硬币场景模板</summary>
++    private static Coin InstantiateCoinScene()
++    {
++        if (_coinScene == null)
++        {
++            _coinScene = GD.Load<PackedScene>(CoinScenePath);
++            if (_coinScene == null)
++            {
++                GD.PrintErr($"[CoinFactory] 无法加载硬币场景: {CoinScenePath}");
++                return null;
++            }
++        }
++
++        var instance = _coinScene.Instantiate();
++        if (instance is Coin coin)
++            return coin;
++
++        GD.PrintErr("[CoinFactory] 硬币场景根节点不是 Coin 类型");
++        instance.QueueFree();
++        return null;
++    }
++}
+diff --git a/scripts/core/GameManager.cs b/scripts/core/GameManager.cs
+index cc481a1..a952ab8 100644
+--- a/scripts/core/GameManager.cs
++++ b/scripts/core/GameManager.cs
+@@ -13,9 +13,18 @@ public partial class GameManager : Node3D
+     {
+         GD.Print("=== CoinFlipper 启动 ===");
+ 
++        // 初始化全局服务（必须在其他系统之前）
++        GameServices.Initialize();
++        GD.Print("[GameManager] 全局服务已初始化");
++
+         if (EnableDebug)
+         {
+             DebugBootstrap.Setup(this);
+         }
+     }
++
++    public override void _ExitTree()
++    {
++        GameServices.Cleanup();
++    }
+ }
+diff --git a/scripts/core/GameServices.cs b/scripts/core/GameServices.cs
+new file mode 100644
+index 0000000..366afb2
+--- /dev/null
++++ b/scripts/core/GameServices.cs
+@@ -0,0 +1,24 @@
++/// <summary>
++/// 全局游戏服务定位器。提供对核心系统的静态访问。
++/// 在 GameManager._Ready() 中初始化。
++/// 
++/// 注意：仅用于真正的全局服务（EventBus 等），
++/// 不要滥用为万能容器。
++/// </summary>
++public static class GameServices
++{
++    /// <summary>全局事件总线实例</summary>
++    public static EventBus EventBus { get; private set; }
++
++    /// <summary>初始化所有全局服务（由 GameManager 调用）</summary>
++    public static void Initialize()
++    {
++        EventBus = new EventBus();
++    }
++
++    /// <summary>清理所有全局服务（场景切换时调用）</summary>
++    public static void Cleanup()
++    {
++        EventBus?.Clear();
++    }
++}
+diff --git a/scripts/events/EventBus.cs b/scripts/events/EventBus.cs
+new file mode 100644
+index 0000000..69a6990
+--- /dev/null
++++ b/scripts/events/EventBus.cs
+@@ -0,0 +1,94 @@
++using System;
++using System.Collections.Generic;
++using Godot;
++
++/// <summary>
++/// 中心化事件总线。所有游戏事件通过此总线分发。
++/// 标签系统的核心通信机制——物理层产生事件，标签层消费事件。
++/// 
++/// 特性：
++/// - 类型安全的泛型订阅/发布
++/// - 深度计数器防止无限循环（最大深度 10）
++/// - 支持取消订阅（返回 Action 用于清理）
++/// 
++/// 服务于 Milestone 2：标签系统核心。
++/// </summary>
++public class EventBus
++{
++    /// <summary>事件分发的最大递归深度，超过则中断并警告</summary>
++    private const int MaxDepth = 10;
++
++    /// <summary>当前分发深度</summary>
++    private int _currentDepth;
++
++    /// <summary>
++    /// 按事件类型存储的订阅者列表。
++    /// Key = typeof(TEvent), Value = List of Action&lt;GameEvent&gt; wrappers
++    /// </summary>
++    private readonly Dictionary<Type, List<Action<GameEvent>>> _handlers = new();
++
++    /// <summary>
++    /// 订阅指定类型的事件。
++    /// </summary>
++    /// <typeparam name="T">事件类型</typeparam>
++    /// <param name="handler">事件处理函数</param>
++    /// <returns>取消订阅的 Action，调用即可移除此订阅</returns>
++    public Action Subscribe<T>(Action<T> handler) where T : GameEvent
++    {
++        var type = typeof(T);
++        if (!_handlers.ContainsKey(type))
++            _handlers[type] = new List<Action<GameEvent>>();
++
++        // 包装为 Action<GameEvent> 以统一存储
++        Action<GameEvent> wrapper = e => handler((T)e);
++        _handlers[type].Add(wrapper);
++
++        // 返回取消订阅的闭包
++        return () => _handlers[type].Remove(wrapper);
++    }
++
++    /// <summary>
++    /// 发布事件，通知所有订阅者。
++    /// </summary>
++    /// <typeparam name="T">事件类型</typeparam>
++    /// <param name="evt">事件实例</param>
++    public void Publish<T>(T evt) where T : GameEvent
++    {
++        _currentDepth++;
++        evt.Depth = _currentDepth;
++
++        if (_currentDepth > MaxDepth)
++        {
++            GD.PrintErr($"[EventBus] 事件递归深度超过 {MaxDepth}，中断分发: {typeof(T).Name}");
++            _currentDepth--;
++            return;
++        }
++
++        var type = typeof(T);
++        if (_handlers.TryGetValue(type, out var handlers))
++        {
++            // 复制列表以防止迭代中修改
++            var snapshot = new List<Action<GameEvent>>(handlers);
++            foreach (var handler in snapshot)
++            {
++                try
++                {
++                    handler(evt);
++                }
++                catch (Exception ex)
++                {
++                    GD.PrintErr($"[EventBus] 处理 {type.Name} 时异常: {ex.Message}");
++                }
++            }
++        }
++
++        _currentDepth--;
++    }
++
++    /// <summary>清除所有订阅（用于场景切换等清理场景）</summary>
++    public void Clear()
++    {
++        _handlers.Clear();
++        _currentDepth = 0;
++    }
++}
+diff --git a/scripts/events/GameEvents.cs b/scripts/events/GameEvents.cs
+new file mode 100644
+index 0000000..92f8186
+--- /dev/null
++++ b/scripts/events/GameEvents.cs
+@@ -0,0 +1,83 @@
++/// <summary>
++/// 游戏事件定义。所有标签系统使用的事件类型。
++/// 事件是纯数据对象，描述"发生了什么"，不包含行为逻辑。
++/// 服务于 Milestone 2：标签系统核心。
++/// </summary>
++
++/// <summary>所有游戏事件的基类</summary>
++public abstract class GameEvent
++{
++    /// <summary>事件发生时的深度（用于防止无限循环）</summary>
++    public int Depth { get; set; }
++}
++
++/// <summary>硬币被翻转时触发（ApplyFlip 调用后）</summary>
++public class CoinFlippedEvent : GameEvent
++{
++    /// <summary>被翻转的硬币</summary>
++    public Coin Coin { get; init; }
++
++    /// <summary>施加的力度</summary>
++    public float Force { get; init; }
++
++    /// <summary>点击位置（世界坐标）</summary>
++    public Godot.Vector3 HitPoint { get; init; }
++}
++
++/// <summary>硬币静止后触发</summary>
++public class CoinSettledEvent : GameEvent
++{
++    public Coin Coin { get; init; }
++
++    /// <summary>是否正面朝上</summary>
++    public bool IsFaceUp { get; init; }
++
++    /// <summary>是否立起来</summary>
++    public bool IsStanding { get; init; }
++
++    /// <summary>本次翻转次数</summary>
++    public int FlipCount { get; init; }
++}
++
++/// <summary>硬币被其他硬币砸中时触发</summary>
++public class CoinHitEvent : GameEvent
++{
++    /// <summary>被砸的硬币</summary>
++    public Coin Target { get; init; }
++
++    /// <summary>砸过来的硬币</summary>
++    public Coin Hitter { get; init; }
++
++    /// <summary>碰撞力度</summary>
++    public float ImpactForce { get; init; }
++}
++
++/// <summary>硬币掉出场地时触发</summary>
++public class CoinFellOffEvent : GameEvent
++{
++    public Coin Coin { get; init; }
++
++    /// <summary>掉落前的位置</summary>
++    public Godot.Vector3 LastPosition { get; init; }
++}
++
++/// <summary>结算阶段开始时触发（对每个硬币）</summary>
++public class ScorePhaseEvent : GameEvent
++{
++    public Coin Coin { get; init; }
++}
++
++/// <summary>回合结束时触发</summary>
++public class RoundEndEvent : GameEvent { }
++
++/// <summary>新硬币生成时触发</summary>
++public class CoinSpawnedEvent : GameEvent
++{
++    public Coin Coin { get; init; }
++}
++
++/// <summary>硬币被移除时触发</summary>
++public class CoinRemovedEvent : GameEvent
++{
++    public Coin Coin { get; init; }
++}
+diff --git a/scripts/tags/CoinQuality.cs b/scripts/tags/CoinQuality.cs
+new file mode 100644
+index 0000000..10cd6a9
+--- /dev/null
++++ b/scripts/tags/CoinQuality.cs
+@@ -0,0 +1,14 @@
++/// <summary>
++/// 硬币品质/稀有度枚举。决定硬币可附着的标签槽数量。
++/// </summary>
++public enum CoinQuality
++{
++    /// <summary>普通品质，最多附着 1 个标签</summary>
++    Normal = 1,
++
++    /// <summary>稀有品质，最多附着 2 个标签</summary>
++    Rare = 2,
++
++    /// <summary>传说品质，最多附着 3 个标签</summary>
++    Legendary = 3,
++}
+diff --git a/scripts/tags/ITagBehavior.cs b/scripts/tags/ITagBehavior.cs
+new file mode 100644
+index 0000000..e453ed5
+--- /dev/null
++++ b/scripts/tags/ITagBehavior.cs
+@@ -0,0 +1,33 @@
++/// <summary>
++/// 标签行为接口。所有标签的行为逻辑必须实现此接口。
++/// 标签是纯 C# 对象（非 Godot Node），保证轻量和可测试性。
++/// 
++/// 设计原则：
++/// - 标签之间不直接引用，通过事件和共享状态间接交互
++/// - 标签只依赖：硬币的公共接口、游戏事件、TagContext
++/// - 效果是数据（ScoreModifier），执行由结算管线负责
++/// 
++/// 服务于 Milestone 2：标签系统核心。
++/// </summary>
++public interface ITagBehavior
++{
++    /// <summary>
++    /// 标签的唯一标识符（如 "fragile", "void", "creature"）。
++    /// 用于数据驱动引用和标签管理器查询。
++    /// </summary>
++    string TagId { get; }
++
++    /// <summary>
++    /// 标签被附着到硬币上时调用。
++    /// 用于初始化状态、订阅事件等。
++    /// </summary>
++    /// <param name="context">标签运行上下文，提供对硬币和事件总线的访问</param>
++    void OnAttached(TagContext context);
++
++    /// <summary>
++    /// 标签从硬币上移除时调用。
++    /// 用于清理状态、取消事件订阅等。
++    /// </summary>
++    /// <param name="context">标签运行上下文</param>
++    void OnDetached(TagContext context);
++}
+diff --git a/scripts/tags/TagContext.cs b/scripts/tags/TagContext.cs
+new file mode 100644
+index 0000000..ddce138
+--- /dev/null
++++ b/scripts/tags/TagContext.cs
+@@ -0,0 +1,20 @@
++/// <summary>
++/// 标签运行上下文。提供标签与游戏系统交互的接口。
++/// 标签不直接访问 Godot 节点树，而是通过此上下文间接操作。
++/// 
++/// 职责：
++/// - 提供对宿主硬币的引用
++/// - 提供事件总线访问
++/// - 提供标签管理器访问（用于添加/移除标签）
++/// </summary>
++public class TagContext
++{
++    /// <summary>标签所附着的硬币</summary>
++    public Coin Coin { get; init; }
++
++    /// <summary>全局事件总线</summary>
++    public EventBus EventBus { get; init; }
++
++    /// <summary>标签管理器（用于动态添加/移除标签）</summary>
++    public TagManager TagManager { get; init; }
++}
+diff --git a/scripts/tags/TagIds.cs b/scripts/tags/TagIds.cs
+new file mode 100644
+index 0000000..cb33cc0
+--- /dev/null
++++ b/scripts/tags/TagIds.cs
+@@ -0,0 +1,36 @@
++/// <summary>
++/// 标签 ID 常量。集中定义所有标签的字符串标识符，
++/// 避免魔法字符串散落在各处。
++/// </summary>
++public static class TagIds
++{
++    /// <summary>虚无：局结束后消失</summary>
++    public const string Void = "void";
++
++    /// <summary>脆弱：翻转后消失</summary>
++    public const string Fragile = "fragile";
++
++    /// <summary>生物：被砸死后变尸体</summary>
++    public const string Creature = "creature";
++
++    /// <summary>尸体：面值归零</summary>
++    public const string Corpse = "corpse";
++
++    /// <summary>超重：质量 ×10</summary>
++    public const string Heavy = "heavy";
++
++    /// <summary>回归：掉出场地后回到场地</summary>
++    public const string Return = "return";
++
++    /// <summary>再弹跳：落地后再弹跳一次</summary>
++    public const string Bounce = "bounce";
++
++    /// <summary>正面翻倍：正面朝上得分翻倍，背面不拿分</summary>
++    public const string DoubleFace = "double_face";
++
++    /// <summary>磁力：落地后吸引周围硬币</summary>
++    public const string Magnetic = "magnetic";
++
++    /// <summary>兔子：落地后生成小兔子硬币</summary>
++    public const string Rabbit = "rabbit";
++}
+diff --git a/scripts/tags/TagManager.cs b/scripts/tags/TagManager.cs
+new file mode 100644
+index 0000000..9ffb79a
+--- /dev/null
++++ b/scripts/tags/TagManager.cs
+@@ -0,0 +1,164 @@
++using System;
++using System.Collections.Generic;
++using System.Linq;
++using Godot;
++
++/// <summary>
++/// 标签管理器。管理硬币上标签的附着、移除和查询。
++/// 每个硬币拥有一个 TagManager 实例。
++/// 
++/// 职责：
++/// - 管理固有标签（不受品质槽位限制）和附着标签（受品质槽位限制）
++/// - 标签生命周期管理（OnAttached / OnDetached）
++/// - 按 TagId 查询标签
++/// - 提供标签列表的只读访问
++/// 
++/// 服务于 Milestone 2：标签系统核心。
++/// </summary>
++public class TagManager
++{
++    private readonly Coin _coin;
++    private readonly EventBus _eventBus;
++
++    /// <summary>固有标签列表（不受品质槽位限制）</summary>
++    private readonly List<TagInstance> _intrinsicTags = new();
++
++    /// <summary>玩家附着的标签列表（受品质槽位限制）</summary>
++    private readonly List<TagInstance> _attachedTags = new();
++
++    /// <summary>硬币品质，决定可附着标签的最大数量</summary>
++    public CoinQuality Quality { get; set; } = CoinQuality.Normal;
++
++    /// <summary>所有标签（固有 + 附着）的只读视图</summary>
++    public IReadOnlyList<TagInstance> AllTags
++    {
++        get
++        {
++            var all = new List<TagInstance>(_intrinsicTags.Count + _attachedTags.Count);
++            all.AddRange(_intrinsicTags);
++            all.AddRange(_attachedTags);
++            return all;
++        }
++    }
++
++    /// <summary>当前附着标签数量</summary>
++    public int AttachedCount => _attachedTags.Count;
++
++    /// <summary>最大可附着标签数量（由品质决定）</summary>
++    public int MaxAttachSlots => (int)Quality;
++
++    public TagManager(Coin coin, EventBus eventBus)
++    {
++        _coin = coin;
++        _eventBus = eventBus;
++    }
++
++    /// <summary>
++    /// 添加固有标签（不受槽位限制）。
++    /// 用于硬币定义中的固有标签。
++    /// </summary>
++    public void AddIntrinsicTag(ITagBehavior behavior)
++    {
++        var instance = new TagInstance(behavior, isIntrinsic: true);
++        _intrinsicTags.Add(instance);
++        behavior.OnAttached(CreateContext());
++        GD.Print($"[TagManager] {_coin.Name}: 添加固有标签 [{behavior.TagId}]");
++    }
++
++    /// <summary>
++    /// 附着标签（受品质槽位限制）。
++    /// </summary>
++    /// <returns>是否成功附着（槽位已满时返回 false）</returns>
++    public bool AttachTag(ITagBehavior behavior)
++    {
++        if (_attachedTags.Count >= MaxAttachSlots)
++        {
++            GD.Print($"[TagManager] {_coin.Name}: 标签槽已满 ({AttachedCount}/{MaxAttachSlots})，无法附着 [{behavior.TagId}]");
++            return false;
++        }
++
++        var instance = new TagInstance(behavior, isIntrinsic: false);
++        _attachedTags.Add(instance);
++        behavior.OnAttached(CreateContext());
++        GD.Print($"[TagManager] {_coin.Name}: 附着标签 [{behavior.TagId}] ({AttachedCount}/{MaxAttachSlots})");
++        return true;
++    }
++
++    /// <summary>
++    /// 移除指定 TagId 的第一个标签（优先移除附着标签）。
++    /// </summary>
++    /// <returns>是否成功移除</returns>
++    public bool RemoveTag(string tagId)
++    {
++        // 先尝试从附着标签中移除
++        var attached = _attachedTags.FirstOrDefault(t => t.Behavior.TagId == tagId);
++        if (attached != null)
++        {
++            attached.Behavior.OnDetached(CreateContext());
++            _attachedTags.Remove(attached);
++            GD.Print($"[TagManager] {_coin.Name}: 移除附着标签 [{tagId}]");
++            return true;
++        }
++
++        // 再尝试从固有标签中移除
++        var intrinsic = _intrinsicTags.FirstOrDefault(t => t.Behavior.TagId == tagId);
++        if (intrinsic != null)
++        {
++            intrinsic.Behavior.OnDetached(CreateContext());
++            _intrinsicTags.Remove(intrinsic);
++            GD.Print($"[TagManager] {_coin.Name}: 移除固有标签 [{tagId}]");
++            return true;
++        }
++
++        return false;
++    }
++
++    /// <summary>查询是否拥有指定 TagId 的标签</summary>
++    public bool HasTag(string tagId)
++    {
++        return AllTags.Any(t => t.Behavior.TagId == tagId);
++    }
++
++    /// <summary>获取指定 TagId 的所有标签实例</summary>
++    public IEnumerable<TagInstance> GetTags(string tagId)
++    {
++        return AllTags.Where(t => t.Behavior.TagId == tagId);
++    }
++
++    /// <summary>移除所有标签并调用 OnDetached</summary>
++    public void ClearAll()
++    {
++        var context = CreateContext();
++        foreach (var tag in _intrinsicTags)
++            tag.Behavior.OnDetached(context);
++        foreach (var tag in _attachedTags)
++            tag.Behavior.OnDetached(context);
++        _intrinsicTags.Clear();
++        _attachedTags.Clear();
++    }
++
++    private TagContext CreateContext()
++    {
++        return new TagContext
++        {
++            Coin = _coin,
++            EventBus = _eventBus,
++            TagManager = this,
++        };
++    }
++}
++
++/// <summary>
++/// 标签实例。包装 ITagBehavior 并记录元数据（是否固有等）。
++/// </summary>
++public class TagInstance
++{
++    public ITagBehavior Behavior { get; }
++    public bool IsIntrinsic { get; }
++
++    public TagInstance(ITagBehavior behavior, bool isIntrinsic)
++    {
++        Behavior = behavior;
++        IsIntrinsic = isIntrinsic;
++    }
++}
+diff --git a/scripts/tags/TagRegistry.cs b/scripts/tags/TagRegistry.cs
+new file mode 100644
+index 0000000..9baf613
+--- /dev/null
++++ b/scripts/tags/TagRegistry.cs
+@@ -0,0 +1,47 @@
++using System;
++using System.Collections.Generic;
++using Godot;
++
++/// <summary>
++/// 标签行为注册表。根据 TagId 创建标签行为实例。
++/// 所有标签行为类型在此集中注册，避免散落的 new 调用。
++/// 
++/// 服务于 Milestone 2：标签系统核心。
++/// </summary>
++public static class TagRegistry
++{
++    /// <summary>标签工厂函数映射：TagId → 创建函数</summary>
++    private static readonly Dictionary<string, Func<ITagBehavior>> _factories = new()
++    {
++        { TagIds.Void, () => new VoidTag() },
++        { TagIds.Fragile, () => new FragileTag() },
++        { TagIds.Creature, () => new CreatureTag() },
++        { TagIds.Corpse, () => new CorpseTag() },
++        { TagIds.Heavy, () => new HeavyTag() },
++        { TagIds.Return, () => new ReturnTag() },
++        { TagIds.Bounce, () => new BounceTag() },
++        { TagIds.DoubleFace, () => new DoubleFaceTag() },
++        { TagIds.Magnetic, () => new MagneticTag() },
++        { TagIds.Rabbit, () => new RabbitTag() },
++    };
++
++    /// <summary>
++    /// 根据 TagId 创建标签行为实例。
++    /// </summary>
++    /// <param name="tagId">标签 ID</param>
++    /// <returns>标签行为实例，未注册时返回 null</returns>
++    public static ITagBehavior Create(string tagId)
++    {
++        if (_factories.TryGetValue(tagId, out var factory))
++            return factory();
++
++        GD.PrintErr($"[TagRegistry] 未注册的标签 ID: {tagId}");
++        return null;
++    }
++
++    /// <summary>检查指定 TagId 是否已注册</summary>
++    public static bool IsRegistered(string tagId)
++    {
++        return _factories.ContainsKey(tagId);
++    }
++}
+diff --git a/scripts/tags/TagTrigger.cs b/scripts/tags/TagTrigger.cs
+new file mode 100644
+index 0000000..f210b1f
+--- /dev/null
++++ b/scripts/tags/TagTrigger.cs
+@@ -0,0 +1,24 @@
++/// <summary>
++/// 标签触发时机枚举。定义标签可以响应的游戏事件类型。
++/// 一个标签可以响应多个时机（通过 HandleEvent 内部判断）。
++/// </summary>
++public enum TagTrigger
++{
++    /// <summary>硬币被翻转时</summary>
++    OnFlip,
++
++    /// <summary>硬币落地静止时</summary>
++    OnLand,
++
++    /// <summary>结算阶段计分时</summary>
++    OnScore,
++
++    /// <summary>被其他硬币砸中时</summary>
++    OnHit,
++
++    /// <summary>掉出场地时</summary>
++    OnFallOff,
++
++    /// <summary>持续性效果（被动属性修饰）</summary>
++    Passive,
++}
+diff --git a/scripts/tags/behaviors/BounceTag.cs b/scripts/tags/behaviors/BounceTag.cs
+new file mode 100644
+index 0000000..41d587a
+--- /dev/null
++++ b/scripts/tags/behaviors/BounceTag.cs
+@@ -0,0 +1,65 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【再弹跳】标签：落地后再弹跳一次。
++/// 响应 CoinSettledEvent，在硬币首次静止时施加一个向上的冲量。
++/// 使用标记位确保每次翻转只触发一次再弹跳。
++/// 
++/// 触发时机：OnLand
++/// 效果：硬币落地静止后，自动再弹起一次
++/// </summary>
++public class BounceTag : ITagBehavior
++{
++    public string TagId => TagIds.Bounce;
++
++    /// <summary>再弹跳的力度倍率（相对于原始翻转力度）</summary>
++    private const float BounceForceRatio = 0.5f;
++
++    /// <summary>再弹跳的基础力度</summary>
++    private const float BounceBaseForce = 1.5f;
++
++    private Action _unsubFlip;
++    private Action _unsubSettle;
++    private Coin _coin;
++    private bool _canBounce;
++
++    public void OnAttached(TagContext context)
++    {
++        _coin = context.Coin;
++        _unsubFlip = context.EventBus.Subscribe<CoinFlippedEvent>(OnFlipped);
++        _unsubSettle = context.EventBus.Subscribe<CoinSettledEvent>(OnSettled);
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        _unsubFlip?.Invoke();
++        _unsubSettle?.Invoke();
++        _unsubFlip = null;
++        _unsubSettle = null;
++    }
++
++    private void OnFlipped(CoinFlippedEvent evt)
++    {
++        if (evt.Coin != _coin) return;
++        _canBounce = true;
++    }
++
++    private void OnSettled(CoinSettledEvent evt)
++    {
++        if (evt.Coin != _coin || !_canBounce) return;
++        _canBounce = false;
++
++        GD.Print($"[BounceTag] {_coin.Name}: 再弹跳！");
++
++        // 施加向上冲量 + 轻微随机旋转
++        _coin.ApplyCentralImpulse(Vector3.Up * BounceBaseForce);
++
++        Vector3 randomTorque = new Vector3(
++            (float)GD.RandRange(-0.5, 0.5),
++            0,
++            (float)GD.RandRange(-0.5, 0.5)
++        );
++        _coin.ApplyTorqueImpulse(randomTorque);
++    }
++}
+diff --git a/scripts/tags/behaviors/CorpseTag.cs b/scripts/tags/behaviors/CorpseTag.cs
+new file mode 100644
+index 0000000..3612a0f
+--- /dev/null
++++ b/scripts/tags/behaviors/CorpseTag.cs
+@@ -0,0 +1,23 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【尸体】标签：面值归零。
++/// 被动属性修饰标签，不响应事件，通过 Coin.GetEffectiveFaceValue() 生效。
++/// 
++/// 触发时机：Passive
++/// 效果：硬币面值视为 0
++/// 来源：生物被砸死后自动添加
++/// </summary>
++public class CorpseTag : ITagBehavior
++{
++    public string TagId => TagIds.Corpse;
++
++    public void OnAttached(TagContext context)
++    {
++        // 被动标签，无需订阅事件
++        // 面值归零通过 Coin.GetEffectiveFaceValue() 查询时判断
++    }
++
++    public void OnDetached(TagContext context) { }
++}
+diff --git a/scripts/tags/behaviors/CreatureTag.cs b/scripts/tags/behaviors/CreatureTag.cs
+new file mode 100644
+index 0000000..700ae1c
+--- /dev/null
++++ b/scripts/tags/behaviors/CreatureTag.cs
+@@ -0,0 +1,46 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【生物】标签：被砸死后变尸体。
++/// 响应 CoinHitEvent，当宿主硬币被其他硬币砸中时，
++/// 移除【生物】标签并添加【尸体】标签。
++/// 
++/// 这是一个通用机制：任何带有【生物】标签的硬币被砸死时，
++/// 都会自动执行"移除生物 + 添加尸体"的状态转换。
++/// 
++/// 触发时机：OnHit
++/// 效果：被砸 → 移除【生物】标签 + 添加【尸体】标签
++/// </summary>
++public class CreatureTag : ITagBehavior
++{
++    public string TagId => TagIds.Creature;
++
++    private Action _unsubscribe;
++    private Coin _coin;
++    private TagManager _tagManager;
++
++    public void OnAttached(TagContext context)
++    {
++        _coin = context.Coin;
++        _tagManager = context.TagManager;
++        _unsubscribe = context.EventBus.Subscribe<CoinHitEvent>(OnCoinHit);
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        _unsubscribe?.Invoke();
++        _unsubscribe = null;
++    }
++
++    private void OnCoinHit(CoinHitEvent evt)
++    {
++        if (evt.Target != _coin) return;
++
++        GD.Print($"[CreatureTag] {_coin.Name}: 生物被 {evt.Hitter?.Name} 砸死，变为尸体");
++
++        // 移除生物标签，添加尸体标签
++        _tagManager.RemoveTag(TagIds.Creature);
++        _tagManager.AddIntrinsicTag(new CorpseTag());
++    }
++}
+diff --git a/scripts/tags/behaviors/DoubleFaceTag.cs b/scripts/tags/behaviors/DoubleFaceTag.cs
+new file mode 100644
+index 0000000..cb2bda7
+--- /dev/null
++++ b/scripts/tags/behaviors/DoubleFaceTag.cs
+@@ -0,0 +1,57 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【正面翻倍】标签：正面朝上得分翻倍，背面朝上不拿分。
++/// 结算时产出 ScoreModifier，由结算管线收集并执行。
++/// 
++/// 触发时机：OnScore
++/// 效果：
++/// - 正面朝上：该硬币的 Chips 贡献 ×2
++/// - 背面朝上：该硬币的 Chips 贡献 = 0
++/// </summary>
++public class DoubleFaceTag : ITagBehavior
++{
++    public string TagId => TagIds.DoubleFace;
++
++    private Action _unsubscribe;
++    private Coin _coin;
++
++    public void OnAttached(TagContext context)
++    {
++        _coin = context.Coin;
++        _unsubscribe = context.EventBus.Subscribe<ScorePhaseEvent>(OnScorePhase);
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        _unsubscribe?.Invoke();
++        _unsubscribe = null;
++    }
++
++    private void OnScorePhase(ScorePhaseEvent evt)
++    {
++        if (evt.Coin != _coin) return;
++
++        // 结算逻辑将在 Milestone 3 的结算管线中完善
++        // 目前仅记录日志，标记效果
++        if (_coin.IsFaceUp)
++        {
++            GD.Print($"[DoubleFaceTag] {_coin.Name}: 正面朝上，得分翻倍！");
++        }
++        else
++        {
++            GD.Print($"[DoubleFaceTag] {_coin.Name}: 背面朝上，不拿分");
++        }
++    }
++
++    /// <summary>
++    /// 获取该标签对 Chips 的乘数修饰。
++    /// 由结算管线在计分时调用。
++    /// </summary>
++    public float GetChipsMultiplier()
++    {
++        if (_coin == null) return 1f;
++        return _coin.IsFaceUp ? 2f : 0f;
++    }
++}
+diff --git a/scripts/tags/behaviors/FragileTag.cs b/scripts/tags/behaviors/FragileTag.cs
+new file mode 100644
+index 0000000..99dd443
+--- /dev/null
++++ b/scripts/tags/behaviors/FragileTag.cs
+@@ -0,0 +1,51 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【脆弱】标签：翻转后硬币消失。
++/// 响应 CoinFlippedEvent，当宿主硬币被翻转时标记移除。
++/// 实际移除在硬币落地静止后执行，避免翻转中途消失的视觉突兀。
++/// 
++/// 触发时机：OnFlip → OnLand（延迟执行）
++/// 效果：硬币被翻转后，落地即消失
++/// </summary>
++public class FragileTag : ITagBehavior
++{
++    public string TagId => TagIds.Fragile;
++
++    private Action _unsubFlip;
++    private Action _unsubSettle;
++    private Coin _coin;
++    private bool _pendingRemoval;
++
++    public void OnAttached(TagContext context)
++    {
++        _coin = context.Coin;
++        _unsubFlip = context.EventBus.Subscribe<CoinFlippedEvent>(OnCoinFlipped);
++        _unsubSettle = context.EventBus.Subscribe<CoinSettledEvent>(OnCoinSettled);
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        _unsubFlip?.Invoke();
++        _unsubSettle?.Invoke();
++        _unsubFlip = null;
++        _unsubSettle = null;
++    }
++
++    private void OnCoinFlipped(CoinFlippedEvent evt)
++    {
++        if (evt.Coin != _coin) return;
++        _pendingRemoval = true;
++        GD.Print($"[FragileTag] {_coin.Name}: 脆弱硬币被翻转，等待落地后移除");
++    }
++
++    private void OnCoinSettled(CoinSettledEvent evt)
++    {
++        if (evt.Coin != _coin || !_pendingRemoval) return;
++        _pendingRemoval = false;
++        GD.Print($"[FragileTag] {_coin.Name}: 脆弱硬币落地，移除");
++        _coin.Tags?.ClearAll();
++        _coin.CallDeferred("queue_free");
++    }
++}
+diff --git a/scripts/tags/behaviors/HeavyTag.cs b/scripts/tags/behaviors/HeavyTag.cs
+new file mode 100644
+index 0000000..588a6f4
+--- /dev/null
++++ b/scripts/tags/behaviors/HeavyTag.cs
+@@ -0,0 +1,29 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【超重】标签：质量 ×10。
++/// 被动属性修饰标签，附着时修改硬币物理质量，移除时恢复。
++/// 
++/// 触发时机：Passive
++/// 效果：硬币质量变为原来的 10 倍
++/// </summary>
++public class HeavyTag : ITagBehavior
++{
++    public string TagId => TagIds.Heavy;
++
++    private float _originalMass;
++
++    public void OnAttached(TagContext context)
++    {
++        _originalMass = context.Coin.Mass;
++        context.Coin.Mass = _originalMass * 10f;
++        GD.Print($"[HeavyTag] {context.Coin.Name}: 质量 {_originalMass} → {context.Coin.Mass}");
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        context.Coin.Mass = _originalMass;
++        GD.Print($"[HeavyTag] {context.Coin.Name}: 质量恢复为 {_originalMass}");
++    }
++}
+diff --git a/scripts/tags/behaviors/MagneticTag.cs b/scripts/tags/behaviors/MagneticTag.cs
+new file mode 100644
+index 0000000..40f6fac
+--- /dev/null
++++ b/scripts/tags/behaviors/MagneticTag.cs
+@@ -0,0 +1,80 @@
++using System;
++using System.Linq;
++using Godot;
++
++/// <summary>
++/// 【磁力】标签：落地后吸引周围硬币。
++/// 响应 CoinSettledEvent，在硬币静止后对周围硬币施加吸引力。
++/// 吸引力在一段时间内持续作用，然后停止。
++/// 
++/// 触发时机：OnLand
++/// 效果：硬币落地后，吸引一定范围内的其他硬币向自身靠拢
++/// </summary>
++public class MagneticTag : ITagBehavior
++{
++    public string TagId => TagIds.Magnetic;
++
++    /// <summary>磁力吸引半径</summary>
++    private const float AttractRadius = 3f;
++
++    /// <summary>磁力吸引力度</summary>
++    private const float AttractForce = 0.8f;
++
++    /// <summary>磁力持续时间（秒）</summary>
++    private const float AttractDuration = 1.0f;
++
++    private Action _unsubFlip;
++    private Action _unsubSettle;
++    private Coin _coin;
++    private bool _canAttract;
++
++    public void OnAttached(TagContext context)
++    {
++        _coin = context.Coin;
++        _unsubFlip = context.EventBus.Subscribe<CoinFlippedEvent>(OnFlipped);
++        _unsubSettle = context.EventBus.Subscribe<CoinSettledEvent>(OnSettled);
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        _unsubFlip?.Invoke();
++        _unsubSettle?.Invoke();
++        _unsubFlip = null;
++        _unsubSettle = null;
++    }
++
++    private void OnFlipped(CoinFlippedEvent evt)
++    {
++        if (evt.Coin != _coin) return;
++        _canAttract = true;
++    }
++
++    private void OnSettled(CoinSettledEvent evt)
++    {
++        if (evt.Coin != _coin || !_canAttract) return;
++        _canAttract = false;
++
++        GD.Print($"[MagneticTag] {_coin.Name}: 磁力吸引启动！");
++
++        // 获取 CoinContainer 中的所有硬币
++        var container = _coin.GetParent();
++        if (container == null) return;
++
++        foreach (var child in container.GetChildren())
++        {
++            if (child is not Coin other || other == _coin) continue;
++
++            Vector3 direction = _coin.GlobalPosition - other.GlobalPosition;
++            float distance = direction.Length();
++
++            if (distance > AttractRadius || distance < 0.01f) continue;
++
++            // 力度随距离衰减
++            float strength = AttractForce * (1f - distance / AttractRadius);
++            Vector3 impulse = direction.Normalized() * strength;
++
++            other.ApplyCentralImpulse(impulse);
++            GD.Print($"[MagneticTag] 吸引 {other.Name}，距离={distance:F2}，力度={strength:F2}");
++        }
++    }
++}
+diff --git a/scripts/tags/behaviors/RabbitTag.cs b/scripts/tags/behaviors/RabbitTag.cs
+new file mode 100644
+index 0000000..615d816
+--- /dev/null
++++ b/scripts/tags/behaviors/RabbitTag.cs
+@@ -0,0 +1,87 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【兔子】标签：落地后生成小兔子硬币。
++/// 响应 CoinSettledEvent，在硬币静止后生成 x 只小兔子硬币，
++/// 其中 x = 本次翻转次数。
++/// 
++/// 触发时机：OnLand
++/// 效果：硬币落地后，在场地上生成小兔子硬币
++/// 依赖：CoinFactory（用于生成小兔子硬币实例）
++/// </summary>
++public class RabbitTag : ITagBehavior
++{
++    public string TagId => TagIds.Rabbit;
++
++    /// <summary>生成小兔子的散布半径</summary>
++    private const float SpawnRadius = 1.5f;
++
++    /// <summary>生成小兔子的高度</summary>
++    private const float SpawnHeight = 2f;
++
++    private Action _unsubFlip;
++    private Action _unsubSettle;
++    private Coin _coin;
++    private EventBus _eventBus;
++    private bool _canSpawn;
++
++    public void OnAttached(TagContext context)
++    {
++        _coin = context.Coin;
++        _eventBus = context.EventBus;
++        _unsubFlip = context.EventBus.Subscribe<CoinFlippedEvent>(OnFlipped);
++        _unsubSettle = context.EventBus.Subscribe<CoinSettledEvent>(OnSettled);
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        _unsubFlip?.Invoke();
++        _unsubSettle?.Invoke();
++        _unsubFlip = null;
++        _unsubSettle = null;
++    }
++
++    private void OnFlipped(CoinFlippedEvent evt)
++    {
++        if (evt.Coin != _coin) return;
++        _canSpawn = true;
++    }
++
++    private void OnSettled(CoinSettledEvent evt)
++    {
++        if (evt.Coin != _coin || !_canSpawn) return;
++        _canSpawn = false;
++
++        int count = Mathf.Max(1, evt.FlipCount);
++        GD.Print($"[RabbitTag] {_coin.Name}: 生成 {count} 只小兔子（翻转次数={evt.FlipCount}）");
++
++        // 通过 CoinFactory 生成小兔子硬币
++        var container = _coin.GetParent();
++        if (container == null) return;
++
++        for (int i = 0; i < count; i++)
++        {
++            var bunny = CoinFactory.CreateBunnyCoin();
++            if (bunny == null)
++            {
++                GD.PrintErr("[RabbitTag] CoinFactory.CreateBunnyCoin() 返回 null");
++                break;
++            }
++
++            // 在母体周围随机位置生成
++            float angle = (float)GD.RandRange(0, Mathf.Tau);
++            float radius = (float)GD.RandRange(0.3f, SpawnRadius);
++            Vector3 offset = new Vector3(
++                Mathf.Cos(angle) * radius,
++                SpawnHeight,
++                Mathf.Sin(angle) * radius
++            );
++
++            container.AddChild(bunny);
++            bunny.GlobalPosition = _coin.GlobalPosition + offset;
++
++            _eventBus?.Publish(new CoinSpawnedEvent { Coin = bunny });
++        }
++    }
++}
+diff --git a/scripts/tags/behaviors/ReturnTag.cs b/scripts/tags/behaviors/ReturnTag.cs
+new file mode 100644
+index 0000000..c175e6e
+--- /dev/null
++++ b/scripts/tags/behaviors/ReturnTag.cs
+@@ -0,0 +1,50 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【回归】标签：掉出场地后回到场地。
++/// 响应 CoinFellOffEvent，将硬币传送回最后的有效位置上方。
++/// 
++/// 触发时机：OnFallOff
++/// 效果：硬币掉出场地后，传送回场地上方并重新落下
++/// </summary>
++public class ReturnTag : ITagBehavior
++{
++    public string TagId => TagIds.Return;
++
++    /// <summary>回归时硬币出现在最后有效位置上方的高度</summary>
++    private const float ReturnHeight = 3f;
++
++    private Action _unsubscribe;
++    private Coin _coin;
++
++    public void OnAttached(TagContext context)
++    {
++        _coin = context.Coin;
++        _unsubscribe = context.EventBus.Subscribe<CoinFellOffEvent>(OnFellOff);
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        _unsubscribe?.Invoke();
++        _unsubscribe = null;
++    }
++
++    private void OnFellOff(CoinFellOffEvent evt)
++    {
++        if (evt.Coin != _coin) return;
++
++        Vector3 returnPos = new Vector3(
++            evt.LastPosition.X,
++            ReturnHeight,
++            evt.LastPosition.Z
++        );
++
++        GD.Print($"[ReturnTag] {_coin.Name}: 回归到 ({returnPos.X:F1}, {returnPos.Y:F1}, {returnPos.Z:F1})");
++
++        // 重置速度并传送
++        _coin.LinearVelocity = Vector3.Zero;
++        _coin.AngularVelocity = Vector3.Zero;
++        _coin.GlobalPosition = returnPos;
++    }
++}
+diff --git a/scripts/tags/behaviors/VoidTag.cs b/scripts/tags/behaviors/VoidTag.cs
+new file mode 100644
+index 0000000..13fa40e
+--- /dev/null
++++ b/scripts/tags/behaviors/VoidTag.cs
+@@ -0,0 +1,36 @@
++using System;
++using Godot;
++
++/// <summary>
++/// 【虚无】标签：回合结束后硬币消失。
++/// 响应 RoundEndEvent，回合结束时移除宿主硬币。
++/// 
++/// 触发时机：回合结束（RoundEndEvent）
++/// 效果：局结束后硬币从场地上消失
++/// </summary>
++public class VoidTag : ITagBehavior
++{
++    public string TagId => TagIds.Void;
++
++    private Action _unsubscribe;
++    private Coin _coin;
++
++    public void OnAttached(TagContext context)
++    {
++        _coin = context.Coin;
++        _unsubscribe = context.EventBus.Subscribe<RoundEndEvent>(OnRoundEnd);
++    }
++
++    public void OnDetached(TagContext context)
++    {
++        _unsubscribe?.Invoke();
++        _unsubscribe = null;
++    }
++
++    private void OnRoundEnd(RoundEndEvent evt)
++    {
++        GD.Print($"[VoidTag] {_coin.Name}: 虚无硬币在回合结束后消失");
++        _coin.Tags?.ClearAll();
++        _coin.CallDeferred("queue_free");
++    }
++}
+diff --git a/scripts/ui/DebugInputHandler.cs b/scripts/ui/DebugInputHandler.cs
+index 6bc6586..f2e6da0 100644
+--- a/scripts/ui/DebugInputHandler.cs
++++ b/scripts/ui/DebugInputHandler.cs
+@@ -1,9 +1,18 @@
+ using Godot;
+ 
+ /// <summary>
+-/// 调试快捷键处理器。处理物理参数的键盘调节输入。
++/// 调试快捷键处理器。处理物理参数调节和标签测试输入。
+ /// 与 DebugUI（纯显示）分离，避免 UI 层直接承担输入职责。
+ /// 由 DebugBootstrap 创建并挂载。
++/// 
++/// 快捷键：
++/// - +/-: 调整基础力度
++/// - [/]: 调整精准度
++/// - 1: 生成小兔子硬币
++/// - 2: 生成黑曜石硬币
++/// - 3: 生成回归硬币（带回归标签）
++/// - 4: 生成磁力硬币
++/// - 5: 生成弹跳硬币
+ /// </summary>
+ public partial class DebugInputHandler : Node
+ {
+@@ -11,38 +20,136 @@ public partial class DebugInputHandler : Node
+     private const float PrecisionStep = 0.1f;
+ 
+     private CoinFlipper _flipper;
++    private Node _coinContainer;
+ 
+     public override void _Ready()
+     {
+         _flipper = GetTree().Root.FindChild(
+             SceneNodes.CoinFlipper, true, false) as CoinFlipper;
++        _coinContainer = GetTree().Root.FindChild(
++            SceneNodes.CoinContainer, true, false);
+ 
+         if (_flipper == null)
+             GD.PrintErr($"[DebugInputHandler] 未找到节点 '{SceneNodes.CoinFlipper}'，快捷键调参不可用");
++        if (_coinContainer == null)
++            GD.PrintErr($"[DebugInputHandler] 未找到节点 '{SceneNodes.CoinContainer}'，硬币生成不可用");
+     }
+ 
+     public override void _UnhandledInput(InputEvent @event)
+     {
+-        if (_flipper == null) return;
+-        if (@event is InputEventKey key && key.Pressed)
++        if (@event is not InputEventKey key || !key.Pressed) return;
++
++        // 力度和精准度调节
++        if (_flipper != null)
+         {
+             switch (key.Keycode)
+             {
+                 case Key.Equal:
+                     _flipper.BaseForce += ForceStep;
+-                    break;
++                    return;
+                 case Key.Minus:
+                     _flipper.BaseForce -= ForceStep;
+-                    break;
++                    return;
+                 case Key.Bracketright:
+                     _flipper.Precision = Mathf.Min(
+                         1f, _flipper.Precision + PrecisionStep);
+-                    break;
++                    return;
+                 case Key.Bracketleft:
+                     _flipper.Precision = Mathf.Max(
+                         0f, _flipper.Precision - PrecisionStep);
+-                    break;
++                    return;
++            }
++        }
++
++        // 标签测试：生成特殊硬币
++        if (_coinContainer != null)
++        {
++            switch (key.Keycode)
++            {
++                case Key.Key1:
++                    SpawnDebugCoin(CoinFactory.CreateBunnyCoin(), "bunny");
++                    return;
++                case Key.Key2:
++                    SpawnDebugCoin(CoinFactory.CreateObsidianCoin(), "obsidian");
++                    return;
++                case Key.Key3:
++                    SpawnDebugCoinWithTag(TagIds.Return, "回归币");
++                    return;
++                case Key.Key4:
++                    SpawnDebugCoinWithTag(TagIds.Magnetic, "磁力币");
++                    return;
++                case Key.Key5:
++                    SpawnDebugCoinWithTag(TagIds.Bounce, "弹跳币");
++                    return;
+             }
+         }
+     }
++
++    /// <summary>生成预定义的特殊硬币</summary>
++    private void SpawnDebugCoin(Coin coin, string defId)
++    {
++        if (coin == null) return;
++
++        // 在场地中心上方随机位置生成
++        float x = (float)GD.RandRange(-2, 2);
++        float z = (float)GD.RandRange(-2, 2);
++
++        _coinContainer.AddChild(coin);
++        coin.GlobalPosition = new Vector3(x, 3f, z);
++
++        // 硬币已添加到场景树，_Ready() 已执行，现在可以附着标签
++        var definition = defId switch
++        {
++            "bunny" => new CoinDefinition
++            {
++                IntrinsicTagIds = new[] { TagIds.Void, TagIds.Fragile, TagIds.Creature }
++            },
++            "obsidian" => new CoinDefinition
++            {
++                IntrinsicTagIds = new[] { TagIds.Void, TagIds.Heavy }
++            },
++            _ => new CoinDefinition { IntrinsicTagIds = System.Array.Empty<string>() }
++        };
++
++        CoinFactory.ApplyIntrinsicTags(coin, definition);
++        GameServices.EventBus?.Publish(new CoinSpawnedEvent { Coin = coin });
++
++        GD.Print($"[Debug] 生成 {coin.Name} at ({x:F1}, 3.0, {z:F1})");
++    }
++
++    /// <summary>生成带有单个标签的普通硬币</summary>
++    private void SpawnDebugCoinWithTag(string tagId, string name)
++    {
++        var definition = new CoinDefinition
++        {
++            DefinitionId = $"debug_{tagId}",
++            DisplayName = name,
++            FaceValue = 1,
++            Quality = CoinQuality.Normal,
++            SizeScale = 1.0f,
++            Mass = 0.5f,
++            IntrinsicTagIds = new[] { tagId },
++            AlbedoColor = tagId switch
++            {
++                TagIds.Return => new Color(0.2f, 0.8f, 0.3f, 1f),   // 绿色
++                TagIds.Magnetic => new Color(0.8f, 0.2f, 0.2f, 1f), // 红色
++                TagIds.Bounce => new Color(0.2f, 0.5f, 0.9f, 1f),   // 蓝色
++                _ => new Color(0.85f, 0.65f, 0.13f, 1f),
++            },
++        };
++
++        var coin = CoinFactory.CreateCoin(definition);
++        if (coin == null) return;
++
++        float x = (float)GD.RandRange(-2, 2);
++        float z = (float)GD.RandRange(-2, 2);
++
++        _coinContainer.AddChild(coin);
++        coin.GlobalPosition = new Vector3(x, 3f, z);
++
++        CoinFactory.ApplyIntrinsicTags(coin, definition);
++        GameServices.EventBus?.Publish(new CoinSpawnedEvent { Coin = coin });
++
++        GD.Print($"[Debug] 生成 {name} [{tagId}] at ({x:F1}, 3.0, {z:F1})");
++    }
+ }
+diff --git a/scripts/ui/DebugUI.cs b/scripts/ui/DebugUI.cs
+index 4f03a3f..432e4b0 100644
+--- a/scripts/ui/DebugUI.cs
++++ b/scripts/ui/DebugUI.cs
+@@ -3,9 +3,9 @@ using System.Linq;
+ using System.Text;
+ 
+ /// <summary>
+-/// 调试信息面板。实时显示硬币状态和物理参数。
++/// 调试信息面板。实时显示硬币状态、物理参数和标签信息。
+ /// 纯显示职责，输入处理由 DebugInputHandler 负责。
+-/// 服务于 Milestone 1：物理手感调试。
++/// 服务于 Milestone 1-2：物理手感调试 + 标签系统验证。
+ /// </summary>
+ public partial class DebugUI : Control
+ {
+@@ -55,6 +55,9 @@ public partial class DebugUI : Control
+             _sb.AppendLine($"浮动范围: {_flipper.ForceVariance:P0}");
+             _sb.AppendLine($"精准度: {_flipper.Precision:P0}");
+         }
++        _sb.AppendLine("--- 快捷键 ---");
++        _sb.AppendLine("1=小兔子 2=黑曜石 3=回归币 4=磁力币 5=弹跳币");
++        _sb.AppendLine("+/-=力度 [/]=精准度");
+         _sb.AppendLine("---");
+ 
+         foreach (var coin in coins)
+@@ -64,7 +67,21 @@ public partial class DebugUI : Control
+             string standing = coin.IsStanding ? " [立起来!]" : "";
+             _sb.Append($"{coin.Name}: {state} {face}{standing}");
+             _sb.Append($" 翻转={coin.FlipCount}次");
+-            _sb.AppendLine($" 面值={coin.FaceValue}");
++            _sb.Append($" 面值={coin.GetEffectiveFaceValue()}");
++
++            // 显示标签信息
++            if (coin.Tags != null)
++            {
++                var tags = coin.Tags.AllTags;
++                if (tags.Count > 0)
++                {
++                    var tagNames = string.Join(", ",
++                        tags.Select(t => t.Behavior.TagId));
++                    _sb.Append($" [{tagNames}]");
++                }
++            }
++
++            _sb.AppendLine();
+         }
+ 
+         _infoLabel.Text = _sb.ToString();

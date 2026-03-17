@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="CoinDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/coin/CoinDefinition.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+DefinitionId = "bunny_corpse"
+DisplayName = "小兔子尸体"
+FaceValue = 1
+Quality = 1
+SizeScale = 0.4
+Mass = 0.1
+IntrinsicTagIds = PackedStringArray("void", "fragile", "corpse")
+AlbedoColor = Color(0.5, 0.45, 0.4, 1)

@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="CoinDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/coin/CoinDefinition.cs" id="1"]
+
+[resource]
+script = ExtResource("1")
+DefinitionId = "obsidian"
+DisplayName = "黑曜石"
+FaceValue = 10
+Quality = 1
+SizeScale = 1.0
+Mass = 0.5
+IntrinsicTagIds = PackedStringArray("void", "heavy")
+AlbedoColor = Color(0.15, 0.1, 0.2, 1)

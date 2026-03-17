@@ -3,9 +3,9 @@ using System.Linq;
 using System.Text;
 
 /// <summary>
-/// 调试信息面板。实时显示硬币状态和物理参数。
+/// 调试信息面板。实时显示硬币状态、物理参数和标签信息。
 /// 纯显示职责，输入处理由 DebugInputHandler 负责。
-/// 服务于 Milestone 1：物理手感调试。
+/// 服务于 Milestone 1-2：物理手感调试 + 标签系统验证。
 /// </summary>
 public partial class DebugUI : Control
 {
@@ -55,6 +55,9 @@ public partial class DebugUI : Control
             _sb.AppendLine($"浮动范围: {_flipper.ForceVariance:P0}");
             _sb.AppendLine($"精准度: {_flipper.Precision:P0}");
         }
+        _sb.AppendLine("--- 快捷键 ---");
+        _sb.AppendLine("1=小兔子 2=黑曜石 3=回归币 4=磁力币 5=弹跳币");
+        _sb.AppendLine("+/-=力度 [/]=精准度");
         _sb.AppendLine("---");
 
         foreach (var coin in coins)
@@ -64,7 +67,21 @@ public partial class DebugUI : Control
             string standing = coin.IsStanding ? " [立起来!]" : "";
             _sb.Append($"{coin.Name}: {state} {face}{standing}");
             _sb.Append($" 翻转={coin.FlipCount}次");
-            _sb.AppendLine($" 面值={coin.FaceValue}");
+            _sb.Append($" 面值={coin.GetEffectiveFaceValue()}");
+
+            // 显示标签信息
+            if (coin.Tags != null)
+            {
+                var tags = coin.Tags.AllTags;
+                if (tags.Count > 0)
+                {
+                    var tagNames = string.Join(", ",
+                        tags.Select(t => t.Behavior.TagId));
+                    _sb.Append($" [{tagNames}]");
+                }
+            }
+
+            _sb.AppendLine();
         }
 
         _infoLabel.Text = _sb.ToString();

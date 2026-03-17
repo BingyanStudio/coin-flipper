@@ -13,9 +13,18 @@ public partial class GameManager : Node3D
     {
         GD.Print("=== CoinFlipper 启动 ===");
 
+        // 初始化全局服务（必须在其他系统之前）
+        GameServices.Initialize();
+        GD.Print("[GameManager] 全局服务已初始化");
+
         if (EnableDebug)
         {
             DebugBootstrap.Setup(this);
         }
+    }
+
+    public override void _ExitTree()
+    {
+        GameServices.Cleanup();
     }
 }
